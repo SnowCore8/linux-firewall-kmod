@@ -1,7 +1,9 @@
 package risk
 
 import (
+	"fmt"
 	"testing"
+	"time"
 )
 
 func TestEngine_RecordEvent(t *testing.T) {
@@ -161,6 +163,84 @@ func TestReputationAdjustment(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("ReputationAdjustment(%v) = %v, want %v", tt.score, got, tt.want)
 		}
+	}
+}
+
+func TestSetVector_TriggerEviction(t *testing.T) {
+	engine := NewEngine(DefaultDimensionWeights())
+	engine.maxSize = 20
+
+	// Insert 25 unique IPs, exceeding maxSize.
+	for i := 0; i < 25; i++ {
+		engine.SetVector(fmt.Sprintf("10.0.0.%d", i), RiskVector{Failure: 1.0}, time.Now().Unix())
+	}
+
+	// After eviction, cache size must not exceed maxSize.
+	if engine.Size() > engine.maxSize {
+		t.Errorf("SetVector: cache size %d exceeds maxSize %d after eviction", engine.Size(), engine.maxSize)
+	}
+}
+
+func TestSetVector_OverwriteNoEviction(t *testing.T) {
+	engine := NewEngine(DefaultDimensionWeights())
+	engine.maxSize = 10
+
+	// Fill cache to capacity.
+	for i := 0; i < 10; i++ {
+		engine.SetVector(fmt.Sprintf("10.0.0.%d", i), RiskVector{Failure: 1.0}, time.Now().Unix())
+	}
+	if engine.Size() != 10 {
+		t.Fatalf("setup: expected 10 entries, got %d", engine.Size())
+	}
+
+	// Overwrite an existing IP; this must NOT trigger eviction.
+	engine.SetVector("10.0.0.5", RiskVector{Failure: 99.0}, time.Now().Unix())
+
+	if engine.Size() != 10 {
+		t.Errorf("SetVector overwrite: cache size changed to %d, want 10 (no eviction expected)", engine.Size())
+	}
+
+	// Verify the value was actually overwritten.
+	vec, ok := engine.GetVector("10.0.0.5")
+	if !ok {
+		t.Fatal("SetVector overwrite: IP not found after overwrite")
+	}
+	if vec.Failure != 99.0 {
+		t.Errorf("SetVector overwrite: Failure = %v, want 99.0", vec.Failure)
+	}
+}
+
+func TestEvictLocked_RemovesOldest(t *testing.T) {
+	engine := NewEngine(DefaultDimensionWeights())
+	engine.maxSize = 10
+
+	now := time.Now()
+	// Insert 10 entries with staggered expiresAt (earliest = index 0).
+	for i := 0; i < 10; i++ {
+		ip := fmt.Sprintf("10.0.0.%d", i)
+		engine.vectors[ip] = &cachedVector{
+			vector:    RiskVector{Failure: float64(i)},
+			lastEvent: now.Unix(),
+			expiresAt: now.Add(time.Duration(i) * time.Minute),
+		}
+	}
+	// Insert one more to trigger eviction (11 > maxSize=10).
+	// target = maxSize/10 = 1, so the single oldest entry should be evicted.
+	engine.SetVector("10.0.0.99", RiskVector{Failure: 100.0}, now.Unix())
+
+	// "10.0.0.0" had the earliest expiresAt (now+0), so it should be the eviction target.
+	if _, ok := engine.vectors["10.0.0.0"]; ok {
+		t.Error("evictLocked: expected 10.0.0.0 (oldest expiresAt) to be evicted, but it is still present")
+	}
+
+	// "10.0.0.99" (the newly inserted IP) must survive.
+	if _, ok := engine.vectors["10.0.0.99"]; !ok {
+		t.Error("evictLocked: newly inserted IP 10.0.0.99 was unexpectedly evicted")
+	}
+
+	// Total entries: 10 original - 1 evicted + 1 new = 10.
+	if engine.Size() != 10 {
+		t.Errorf("evictLocked: cache size = %d, want 10", engine.Size())
 	}
 }
 

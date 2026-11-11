@@ -74,6 +74,34 @@ func TestReservedPredicateMatchesLegacySet(t *testing.T) {
 // `[203.0.113.50:12345]` 的 `host:port` 是**一个** token：提取层把它整体交给地址
 // 解析并因无法解析而放弃。带端口的形态只由 jail 正则的捕获组命中（捕获组不含端口），
 // 提取层不做「去掉端口再试」的猜测。
+// TestIsReserved_IPv4Mapped 验证 IPv4-mapped IPv6 地址先 Unmap 再走 IPv4 判据，
+// 否则 ::ffff:127.0.0.1 这类环回地址会穿透过滤被当作可封禁对象。
+func TestIsReserved_IPv4Mapped(t *testing.T) {
+	reserved := []string{
+		"::ffff:127.0.0.1",   // 环回
+		"::ffff:0.0.0.0",     // 本网络
+		"::ffff:224.0.0.1",   // 组播
+		"::ffff:255.255.255.255", // 广播
+	}
+	for _, s := range reserved {
+		if !IsReserved(mustAddr(t, s)) {
+			t.Errorf("%s 应判为保留段（Unmap 后走 IPv4 判据）", s)
+		}
+	}
+
+	// IPv4-mapped 的全球可路由地址不应判为保留
+	global := []string{
+		"::ffff:10.0.0.1",
+		"::ffff:192.168.1.1",
+		"::ffff:8.8.8.8",
+	}
+	for _, s := range global {
+		if IsReserved(mustAddr(t, s)) {
+			t.Errorf("%s 不应判为保留段", s)
+		}
+	}
+}
+
 func TestExtractDoesNotSplitHostPort(t *testing.T) {
 	if got, ok := ExtractIP("get a user connection [203.0.113.50:12345]"); ok {
 		t.Fatalf("host:port 不应被提取层切出地址，却得到 %v", got)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestNewDB_CreatesSchema(t *testing.T) {
@@ -148,5 +149,63 @@ func TestCleanupExpired_NewTables(t *testing.T) {
 	}
 	if vectorCount != 0 {
 		t.Errorf("ip_risk_vectors not cleaned up: got %d rows, want 0", vectorCount)
+	}
+}
+
+func TestCleanupScheduler_ReturnsDoneChannel(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := NewDB(Config{
+		Path:   dbPath,
+		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	})
+	if err != nil {
+		t.Fatalf("NewDB failed: %v", err)
+	}
+	defer db.Close()
+
+	stopCh := make(chan struct{})
+	done := db.StartCleanupScheduler(50*time.Millisecond, 7, stopCh)
+
+	// Let the ticker fire at least once.
+	time.Sleep(100 * time.Millisecond)
+
+	close(stopCh)
+
+	select {
+	case <-done:
+		// goroutine exited as expected.
+	case <-time.After(2 * time.Second):
+		t.Fatal("done channel not closed within 2s after stopCh closed")
+	}
+}
+
+func TestReputationRecoveryScheduler_ReturnsDoneChannel(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+
+	db, err := NewDB(Config{
+		Path:   dbPath,
+		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	})
+	if err != nil {
+		t.Fatalf("NewDB failed: %v", err)
+	}
+	defer db.Close()
+
+	stopCh := make(chan struct{})
+	done := db.StartReputationRecoveryScheduler(50*time.Millisecond, 1, 100, stopCh)
+
+	// Let the ticker fire at least once.
+	time.Sleep(100 * time.Millisecond)
+
+	close(stopCh)
+
+	select {
+	case <-done:
+		// goroutine exited as expected.
+	case <-time.After(2 * time.Second):
+		t.Fatal("done channel not closed within 2s after stopCh closed")
 	}
 }

@@ -284,6 +284,19 @@ func sortedKeys(m map[string]any) []string {
 	return out
 }
 
+// TestWriteFrame_ClosedChannelNoPanic 核对 writeFrame 向已关闭通道发送时不会 panic，
+// 而是返回错误。覆盖 4a09c8e3 的修复：recover 捕获 send on closed channel。
+func TestWriteFrame_ClosedChannelNoPanic(t *testing.T) {
+	out := make(chan []byte, 1)
+	close(out)
+	conn := &sseConn{out: out}
+
+	err := conn.writeFrame("test", map[string]string{"key": "value"})
+	if err == nil {
+		t.Fatal("writeFrame 向已关闭通道发送后应返回错误，实际返回 nil")
+	}
+}
+
 // frameData 取帧里 `data:` 行的内容。
 func frameData(t *testing.T, frame string) string {
 	t.Helper()

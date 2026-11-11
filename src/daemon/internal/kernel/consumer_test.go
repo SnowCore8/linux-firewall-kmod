@@ -1011,6 +1011,49 @@ func TestClaimLeaseSeparatesRefusalFromLinkFailure(t *testing.T) {
 	})
 }
 
+// TestLeaseClaimed_ConcurrentAccess 验证 leaseClaimed 的并发安全性：
+// ClaimLease 在主 goroutine 写入 (Store)，Run 在独立 goroutine 读取 (Load)。
+// 普通 bool 存在数据竞争，必须用 atomic.Bool。用 go test -race 验证。
+func TestLeaseClaimed_ConcurrentAccess(t *testing.T) {
+	f := newPumpFixture(t)
+	f.sampler.ack = contract.DaemonRegisterAck{Accepted: true}
+
+	const goroutines = 8
+	const iterations = 100
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+
+	// 写入方：并发调用 ClaimLease，每次都会执行 leaseClaimed.Store(true)。
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				// 重置标志以允许 Store 再次触发（模拟多次启动场景）。
+				f.pump.leaseClaimed.Store(false)
+				_ = f.pump.ClaimLease()
+			}
+		}()
+	}
+
+	// 读取方：并发读取 leaseClaimed，模拟 Run 在独立 goroutine 中的检查。
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations; j++ {
+				_ = f.pump.leaseClaimed.Load()
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// 最终状态应为 true（最后一次 ClaimLease 成功）。
+	if !f.pump.leaseClaimed.Load() {
+		t.Fatal("并发访问后 leaseClaimed 应为 true")
+	}
+}
+
 // TestLeaseClaimedCallbackRunsOnceAfterAcceptance 钉住 trusted_ips 的时序：
 // 只有内核确认注册成功之后才允许下发启动期白名单，且续约成功不能重复触发。
 func TestLeaseClaimedCallbackRunsOnceAfterAcceptance(t *testing.T) {

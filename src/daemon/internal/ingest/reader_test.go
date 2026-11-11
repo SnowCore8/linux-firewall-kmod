@@ -278,3 +278,53 @@ func TestCloseIsIdempotent(t *testing.T) {
 		t.Fatal("关闭后不应报告已打开")
 	}
 }
+
+// TestSeekFailResetsAllState 覆盖 d5ce94db 修复：Seek 失败后必须调用 Reset()
+// 清除全部状态（fd/inode/offset），避免残留状态导致后续轮转检测误判。
+//
+// 测试技巧：用 os.NewFile 包装一个未打开的大号 fd 注入 r.fd。该 fd 不是 nil（不
+// 会被当作「未打开」走重开分支），但内核里不存在，Seek 必然返回 EBADF。同时 Lstat
+// 打开路径时获得的 fd 不可能与该号码冲突，从而精确覆盖修复路径。
+func TestSeekFailResetsAllState(t *testing.T) {
+	dir := newTempDir(t)
+	path := filepath.Join(dir, "a.log")
+	if err := os.WriteFile(path, []byte("data\n"), 0o644); err != nil {
+		t.Fatalf("写文件失败：%v", err)
+	}
+
+	// 取真实 inode：Lstat 比对 inode 时不会触发轮转检测，确保代码走到 Seek 分支。
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("打开失败：%v", err)
+	}
+	meta, err := f.Stat()
+	if err != nil {
+		t.Fatalf("Stat 失败：%v", err)
+	}
+	realInode := inodeOf(meta)
+	f.Close()
+
+	// 注入无效 fd：os.NewFile 接受该号码（非 nil），但内核无此 fd，Seek 必败。
+	r := NewSourceReader(nil)
+	r.fd = os.NewFile(99999, path)
+	r.inode = realInode
+	r.offset = 3 // 必须 ≤ 文件大小（5），否则截断检测会在 Seek 之前触发 Reset。
+
+	// ReadNew 流程：Lstat 成功且 inode 一致 → 不触发轮转 → offset > 0 进入 Seek
+	// → Seek(99999, 100, SEEK_SET) 失败 → 调用 Reset() → 返回错误。
+	_, err = r.ReadNew(path)
+	if err == nil {
+		t.Fatal("Seek 失败应返回错误")
+	}
+
+	// 修复核心断言：Reset() 必须清除全部状态。
+	if r.IsOpen() {
+		t.Fatal("Seek 失败后 fd 必须为 nil")
+	}
+	if r.Inode() != 0 {
+		t.Fatalf("Seek 失败后 inode 必须为 0，实得 %d", r.Inode())
+	}
+	if r.Offset() != 0 {
+		t.Fatalf("Seek 失败后 offset 必须为 0，实得 %d", r.Offset())
+	}
+}

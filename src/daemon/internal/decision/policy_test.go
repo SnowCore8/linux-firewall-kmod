@@ -63,6 +63,41 @@ func TestIsInternalAcceptsOnlyPrivateRanges(t *testing.T) {
 	}
 }
 
+// TestIsInternal_IPv4Mapped 验证 IPv4-mapped IPv6 地址先 Unmap 再走 IPv4 判据，
+// 否则 ::ffff:10.0.0.1 这类内网地址无法获得阈值放宽，易被误封。
+func TestIsInternal_IPv4Mapped(t *testing.T) {
+	internal := []string{
+		"::ffff:10.0.0.1",
+		"::ffff:10.255.255.255",
+		"::ffff:172.16.0.1",
+		"::ffff:172.31.255.255",
+		"::ffff:192.168.0.1",
+		"::ffff:192.168.1.1",
+		"::ffff:192.168.255.255",
+	}
+	for _, s := range internal {
+		if !IsInternal(addr(t, s)) {
+			t.Errorf("%s 应判定为内网（Unmap 后走 IPv4 判据）", s)
+		}
+	}
+
+	// IPv4-mapped 的外网地址不应判为内网
+	external := []string{
+		"::ffff:8.8.8.8",
+		"::ffff:9.255.255.255",
+		"::ffff:11.0.0.1",
+		"::ffff:172.15.255.255",
+		"::ffff:172.32.0.1",
+		"::ffff:192.167.255.255",
+		"::ffff:192.169.0.1",
+	}
+	for _, s := range external {
+		if IsInternal(addr(t, s)) {
+			t.Errorf("%s 不应判定为内网", s)
+		}
+	}
+}
+
 func TestEffectiveThresholdScalesAndNeverReachesZero(t *testing.T) {
 	// 加法模型：base + peak(+2) + internal(+3) + reputation(-2/−1/0)
 	cases := []struct {
