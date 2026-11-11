@@ -91,11 +91,6 @@ func (h *APIHandlers) GetThreatFeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := r.PathValue("id")
-	if id == "" {
-		WriteCode(w, httpcontract.Code40006, "missing feed id")
-		return
-	}
-
 	for _, feed := range h.threatFeedViews() {
 		if feed.ID == id {
 			WriteSuccess(w, feed)
