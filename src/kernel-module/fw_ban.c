@@ -33,7 +33,9 @@
  *
  * 定时器与释放的安全性（关键）：
  *   到期回调整体包在 rcu_read_lock() 里。删除路径（手动解封 / 白名单联动 /
- *   退出清理）用 timer_delete()（非等待）+ hlist_del_rcu() + call_rcu() 释放。
+ *   退出清理）用 timer_delete()（非等待）+ hlist_del_init_rcu() + call_rcu() 释放。
+ *   摘链一律 hlist_del_init_rcu()（pprev 置 NULL）：到期回调与删除路径竞态时，
+ *   hlist_unhashed() 必须仍能判出「已摘链」，否则会二次摘链并写毒化指针。
  *   由于 call_rcu 的释放回调必须等一个宽限期结束，而正在执行的到期回调持有
  *   RCU 读侧临界区，宽限期不会在它结束前完成 —— 因此回调不可能访问到已释放
  *   的节点。这样既不需要在持桶锁时调用 timer_delete_sync()（会自锁死），
@@ -300,6 +302,15 @@ static void fw_ban_expire_cb(struct timer_list *t) {
     rcu_read_unlock();
     return;
   }
+  /*
+   * 续期为永久：续期路径写 is_permanent=1 后只做 timer_delete()（不同步），
+   * 本回调可能已在运行。此时条目按永久保留，绝不能按到期摘链删除。
+   */
+  if (READ_ONCE(n->is_permanent)) {
+    spin_unlock_bh(&layer->locks[bkt]);
+    rcu_read_unlock();
+    return;
+  }
   /* 续期竞态：到期前被延长，则重武装本次定时器（同一次 READ_ONCE 取值判、用） */
   unb = READ_ONCE(n->unban_jiffies);
   if (!READ_ONCE(n->is_permanent) && time_before(jiffies, unb)) {
@@ -309,7 +320,7 @@ static void fw_ban_expire_cb(struct timer_list *t) {
     return;
   }
 
-  hlist_del_rcu(&n->hash);
+  hlist_del_init_rcu(&n->hash);
   atomic_dec(&fw_info.ban_count);
   spin_unlock_bh(&layer->locks[bkt]);
 
@@ -352,7 +363,7 @@ void fw_ban_exit(void) {
 
         hlist_for_each_entry_safe(n, tmp, &layer->buckets[bkt], hash) {
           timer_delete(&n->expire_timer);
-          hlist_del_rcu(&n->hash);
+          hlist_del_init_rcu(&n->hash);
           call_rcu(&n->rcu, fw_ban_free_rcu);
         }
         spin_unlock_bh(&layer->locks[bkt]);
@@ -584,7 +595,7 @@ int fw_ban_del(u8 af, const void *addr, u8 prefix_len, bool notify) {
     return -ENOENT;
   }
   timer_delete(&n->expire_timer);
-  hlist_del_rcu(&n->hash);
+  hlist_del_init_rcu(&n->hash);
   atomic_dec(&fw_info.ban_count);
   spin_unlock_bh(&layer->locks[bkt]);
 
@@ -631,7 +642,7 @@ void fw_ban_del_matching(u8 af, const void *network, u8 prefix_len) {
         if (!fw_prefix_match(af, &n->addr, network, prefix_len))
           continue;
         timer_delete(&n->expire_timer);
-        hlist_del_rcu(&n->hash);
+        hlist_del_init_rcu(&n->hash);
         atomic_dec(&fw_info.ban_count);
         call_rcu(&n->rcu, fw_ban_free_rcu);
         fw_stat_inc_unbans();
