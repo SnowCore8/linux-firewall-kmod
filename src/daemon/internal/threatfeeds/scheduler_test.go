@@ -66,6 +66,52 @@ func TestScheduler_Jitter(t *testing.T) {
 	}
 }
 
+// TestScheduler_JitterClampedToHalfInterval 守住「抖动大于间隔」：管理器固定用
+// 30 分钟抖动，而配置允许 refresh_interval 低至 60 秒。不夹紧时延迟为负，timer
+// 立刻到期，定时刷新退化成对情报源的连续拉取。
+func TestScheduler_JitterClampedToHalfInterval(t *testing.T) {
+	scheduler := NewScheduler(60*time.Second, 30*time.Minute)
+
+	for i := 0; i < 200; i++ {
+		delay := scheduler.calculateJitter()
+		if delay < 30*time.Second || delay > 90*time.Second {
+			t.Fatalf("第 %d 次延迟 = %v，期望落在 [30s, 90s]", i+1, delay)
+		}
+	}
+}
+
+// TestScheduler_NonPositiveIntervalDoesNotSpin 核对非法间隔的兜底：间隔为 0 时
+// timer 不能取非正值，否则循环会连续触发。
+func TestScheduler_NonPositiveIntervalDoesNotSpin(t *testing.T) {
+	scheduler := NewScheduler(0, 0)
+
+	var count atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go scheduler.Run(ctx, func() { count.Add(1) })
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	if got := count.Load(); got != 1 {
+		t.Errorf("间隔为 0 时 100ms 内触发 %d 次，期望只有首次 1 次", got)
+	}
+}
+
+// TestScheduler_RunAfterStopDoesNotFire 核对关停后不再触发：Stop 之后再进入 Run
+// 不应再执行一次刷新。
+func TestScheduler_RunAfterStopDoesNotFire(t *testing.T) {
+	scheduler := NewScheduler(time.Hour, 0)
+	scheduler.Stop()
+
+	var count atomic.Int32
+	scheduler.Run(context.Background(), func() { count.Add(1) })
+
+	if got := count.Load(); got != 0 {
+		t.Errorf("Stop 之后 Run 触发了 %d 次，期望 0", got)
+	}
+}
+
 func TestScheduler_Interval(t *testing.T) {
 	scheduler := NewScheduler(24*time.Hour, 30*time.Minute)
 
