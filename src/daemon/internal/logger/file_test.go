@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -136,6 +137,39 @@ func TestOversizedExistingFileRotatesOnFirstWrite(t *testing.T) {
 
 	assertContent(t, rotatedPath(path, 1), existing)
 	assertContent(t, path, "line\n")
+}
+
+// TestRotationFailureKeepsWriting 回归：开新片失败（磁盘满/配额）不得让日志永久停写。
+//
+// 轮转已把当前片改名为 `.1`、开新文件却失败时，必须回滚改名并继续写原句柄；
+// 若直接返回错误，此后每一行都会在轮转处失败，日志永久消失且 `s.path` 也不存在。
+func TestRotationFailureKeepsWriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fw.log")
+	s := mustFileSink(t, path, 100, 3)
+
+	writeLine(t, s, fixedLine('A', 60))
+
+	orig := openLogFile
+	openLogFile = func(string, int, os.FileMode) (*os.File, error) {
+		return nil, errors.New("注入：开新文件失败")
+	}
+	t.Cleanup(func() { openLogFile = orig })
+
+	line := fixedLine('B', 60)
+	n, err := s.Write([]byte(line))
+	if err == nil {
+		t.Fatal("开新文件失败应向调用方报告错误")
+	}
+	if n != len(line) {
+		t.Fatalf("轮转失败后这一行仍应写出，实写 %d 字节（期望 %d）", n, len(line))
+	}
+	assertContent(t, path, fixedLine('A', 60)+line)
+
+	// 故障消失后轮转恢复正常，历史片里是此前的完整内容。
+	openLogFile = orig
+	writeLine(t, s, fixedLine('C', 60))
+	assertContent(t, path, fixedLine('C', 60))
+	assertContent(t, rotatedPath(path, 1), fixedLine('A', 60)+line)
 }
 
 // TestRotatedSlicesRemainValidJSONL 断言轮转保留下来的记录仍是完整、连续的 JSON 行。

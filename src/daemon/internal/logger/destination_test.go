@@ -311,8 +311,10 @@ func TestRotationFailureStillReachesSyslog(t *testing.T) {
 	if msg := waitDatagram(t, received); !strings.Contains(msg, "轮转失败仍要落系统日志") {
 		t.Fatalf("系统日志消息不符: %q", msg)
 	}
-	if got := readFile(t, path); got != existing {
-		t.Fatalf("轮转失败不应改动文件内容，实际 %q", got)
+	// 轮转失败时不改名、不删除任何已有片；本条记录改为追加到当前片，不因轮转失败丢弃
+	// （否则磁盘恢复前会连续丢日志）。
+	if got := readFile(t, path); !strings.HasPrefix(got, existing) {
+		t.Fatalf("轮转失败不应损坏已有内容，实际 %q", got)
 	}
 }
 

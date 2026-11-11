@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -10,6 +11,9 @@ import (
 func rotatedPath(base string, n uint32) string {
 	return fmt.Sprintf("%s.%d", base, n)
 }
+
+// openLogFile 可替换，测试用它注入「改名成功但开新文件失败」的半途状态。
+var openLogFile = os.OpenFile
 
 // stderrSink 写 stderr。Go 不需要 dup(2)：os.Stderr 由运行时持有，关闭本
 // sink 不会关掉进程的 stderr，因此 Close 是空操作。
@@ -37,7 +41,7 @@ type fileSink struct {
 //
 // maxBytes 为 0 表示关闭轮转；maxFiles 至少为 1（1 表示只留当前片）。
 func newFileSink(path string, maxBytes uint64, maxFiles uint32) (*fileSink, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	f, err := openLogFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
 		return nil, err
 	}
@@ -55,12 +59,17 @@ func newFileSink(path string, maxBytes uint64, maxFiles uint32) (*fileSink, erro
 //
 // `written > 0` 这个前提有两重作用：刚打开的空文件不会立刻轮转，且单条超长记录不会被反复
 // 轮转（始终允许至少写出一条）。
+//
+// 轮转失败**不放弃这一行**：继续写当前句柄并把错误一并返回。若轮转失败就提前返回，
+// 一次磁盘满/配额超限会让此后每一行都在轮转处失败，日志永久停写且没有任何副本。
 func (s *fileSink) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.maxBytes > 0 && s.written > 0 && s.written+uint64(len(p)) > s.maxBytes {
 		if err := s.rotate(); err != nil {
-			return 0, err
+			n, werr := s.file.Write(p)
+			s.written += uint64(n)
+			return n, errors.Join(err, werr)
 		}
 	}
 	n, err := s.file.Write(p)
@@ -109,8 +118,14 @@ func (s *fileSink) rotate() error {
 	if err := os.Rename(s.path, rotatedPath(s.path, 1)); err != nil {
 		return err
 	}
-	next, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	next, err := openLogFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
+		// 开新文件失败（磁盘满、配额）时把刚改名的片改回原路径：旧句柄仍指向同一个
+		// inode，改名回来后继续追加即可。不回滚的话 s.path 消失，日志查看器读不到，
+		// 下一次轮转的改名也会因源文件不存在而失败。
+		if rbErr := os.Rename(rotatedPath(s.path, 1), s.path); rbErr != nil {
+			return fmt.Errorf("轮转后无法打开新文件: %w（回滚改名失败: %v）", err, rbErr)
+		}
 		return err
 	}
 	_ = s.file.Close()
