@@ -17,12 +17,19 @@
  * 连续重连超过 `MAX_RECONNECT_ATTEMPTS`（100）次后进入 'exhausted' 态，停止自动重试，
  * 等用户手动点「重新连接」——避免守护进程长期缺席时无限退避。
  *
+ * 重连校准：断线期间服务端不补发错过的帧，恢复连接的那一刻要主动拉一次真值，
+ * 否则界面会停在断线前的旧状态，直到下一次域帧或 REST 轮询才纠正。做法是复用站内已有的
+ * 「刷新当前页」广播（lib/appEvents）：各页已通过 useRefreshSignal 注册了自己的 REST refetch，
+ * 重连成功时广播一次即可，不必为校准再发明一条通道。首次连接不广播——首屏各页本来就会取数，
+ * 重复取只是浪费；广播只触发 REST 拉取，不碰连接本身，因此不会自我循环。
+ *
  * 日志流（/api/v2/logs/stream）不在这里：它的事件名（connected/log/error）按门禁要求必须
  * 出现在 views/Logs.tsx，故那条流由日志页自己接管。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { eventsStreamUrl, getSseStatus } from '../api/endpoints'
+import { emitRefresh } from '../lib/appEvents.ts'
 import { nextSeq } from '../lib/freshness'
 import type {
   BanResponse,
@@ -65,7 +72,7 @@ export interface SseSnapshot {
   disconnectedAt: number
 }
 
-const INITIAL_SNAPSHOT: SseSnapshot = {
+export const INITIAL_SNAPSHOT: SseSnapshot = {
   state: 'idle',
   stats: null,
   bans: null,
@@ -86,13 +93,33 @@ export function backoffSeconds(attempt: number): number {
 /** 最大自动重连次数；超过后进入 exhausted 态，停止退避重连，等用户手动重试。 */
 export const MAX_RECONNECT_ATTEMPTS = 100
 
-/** 安全解析帧 data；解析失败返回 null（不因一条坏帧打断整条流）。 */
-function parseFrame<T>(raw: string): T | null {
+/** 帧的载荷形状：stats 是单个对象，其余四个域是整表数组（与各自的 REST 端点同形）。 */
+type FrameShape = 'object' | 'array'
+
+/**
+ * 安全解析帧 data，并做**最小**形状校验；不合法返回 null（不因一条坏帧打断整条流）。
+ *
+ * 为什么不能只写 `JSON.parse(raw) as T`：那只是编译期断言，运行时什么都不查。后端换了形状
+ * （null、标量、或把数组写成对象）时，帧会被当数据继续往下渲染，表现为整页空白而不是报错，
+ * 排查时看不到任何线索。这里只挡「载荷根本不像本域数据」这一层，不写完整 schema——逐字段
+ * 校验与契约重复，维护成本高于收益；DEV 下打一条 warn 便于定位，生产静默丢弃。
+ */
+function parseFrame<T>(raw: string, shape: FrameShape): T | null {
+  let value: unknown
   try {
-    return JSON.parse(raw) as T
+    value = JSON.parse(raw)
   } catch {
     return null
   }
+  const isPlainObject = typeof value === 'object' && value !== null && !Array.isArray(value)
+  const valid = shape === 'array' ? Array.isArray(value) : isPlainObject
+  if (!valid) {
+    if (import.meta.env.DEV) {
+      console.warn(`[useSse] 丢弃形状不符的帧（期望 ${shape}）：`, raw.slice(0, 200))
+    }
+    return null
+  }
+  return value as T
 }
 
 /** useEventStream 的返回：连接快照 + 一个手动重连入口。 */
@@ -114,6 +141,10 @@ export function useEventStream(enabled: boolean): EventStreamResult {
   enabledRef.current = enabled
   // 卸载保护：异步回调（如 getSseStatus 的 .then）在组件卸载后不应再触发状态更新
   const mountedRef = useRef(true)
+  // 是否成功连通过：用来区分「首次连接」与「断线重连」，只有后者才需要校准
+  const openedOnceRef = useRef(false)
+  // 本次重连之前确实丢过一条已建立的连接（断线期间可能有帧被错过）
+  const needsResyncRef = useRef(false)
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -146,11 +177,16 @@ export function useEventStream(enabled: boolean): EventStreamResult {
 
     es.addEventListener('connected', () => {
       attemptsRef.current = 0
+      const isReconnect = needsResyncRef.current
+      needsResyncRef.current = false
+      openedOnceRef.current = true
       setSnapshot((prev) => ({ ...prev, state: 'open', attempts: 0, lastEventAt: Date.now(), disconnectedAt: 0 }))
+      // 重连成功：立刻广播一次刷新，让各页用 REST 拉回断线期间的真值（错过的事件不会补发）
+      if (isReconnect) emitRefresh()
     })
 
     es.addEventListener('stats', (e: MessageEvent<string>) => {
-      const data = parseFrame<StatsResponse>(e.data)
+      const data = parseFrame<StatsResponse>(e.data, 'object')
       if (!data) return
       setSnapshot((prev) => ({
         ...prev,
@@ -162,7 +198,7 @@ export function useEventStream(enabled: boolean): EventStreamResult {
     })
 
     es.addEventListener('bans', (e: MessageEvent<string>) => {
-      const data = parseFrame<BanResponse[]>(e.data)
+      const data = parseFrame<BanResponse[]>(e.data, 'array')
       if (!data) return
       setSnapshot((prev) => ({
         ...prev,
@@ -174,7 +210,7 @@ export function useEventStream(enabled: boolean): EventStreamResult {
     })
 
     es.addEventListener('jails', (e: MessageEvent<string>) => {
-      const data = parseFrame<JailResponse[]>(e.data)
+      const data = parseFrame<JailResponse[]>(e.data, 'array')
       if (!data) return
       setSnapshot((prev) => ({
         ...prev,
@@ -186,7 +222,7 @@ export function useEventStream(enabled: boolean): EventStreamResult {
     })
 
     es.addEventListener('whitelist', (e: MessageEvent<string>) => {
-      const data = parseFrame<WhitelistEntry[]>(e.data)
+      const data = parseFrame<WhitelistEntry[]>(e.data, 'array')
       if (!data) return
       setSnapshot((prev) => ({
         ...prev,
@@ -198,7 +234,7 @@ export function useEventStream(enabled: boolean): EventStreamResult {
     })
 
     es.addEventListener('rates', (e: MessageEvent<string>) => {
-      const data = parseFrame<RateResponse[]>(e.data)
+      const data = parseFrame<RateResponse[]>(e.data, 'array')
       if (!data) return
       setSnapshot((prev) => ({
         ...prev,
@@ -233,6 +269,8 @@ export function useEventStream(enabled: boolean): EventStreamResult {
     es.onerror = () => {
       // 首次失败或连通后又断：一律自己接管重连（不用 EventSource 自带的不可控重连）
       closeStream()
+      // 只记录「丢过一条已建立的连接」：首次就连不上时没有旧状态可校准，不需要重连后补拉
+      if (openedOnceRef.current) needsResyncRef.current = true
       if (!enabledRef.current) return
       setSnapshot((prev) => ({
         ...prev,

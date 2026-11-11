@@ -445,7 +445,7 @@ function SummarySection({ result, onOpenIp }: SummarySectionProps) {
     <Flex vertical gap={16} className="fw-fade-in">
       <div style={GRID_AUTO_FIT}>
         <ChartCard title="威胁等级">
-          <BaseChart option={gauge} height={180} />
+          <BaseChart option={gauge} height={180} title="威胁等级" />
           <Flex justify="center" style={{ marginTop: -8 }}>
             <Tag color={threatColor} style={{ fontWeight: 600 }}>
               {threatLabel(level)}
@@ -707,7 +707,7 @@ function PredictionSection({ result, onOpenIp }: PredictionSectionProps) {
           Jail 攻击趋势
         </Typography.Title>
         <ChartCard title="各 Jail 近 24 小时封禁">
-          <BaseChart option={jailOption} height={240} empty={chartEmpty} />
+          <BaseChart option={jailOption} height={240} title="各 Jail 近 24 小时封禁" empty={chartEmpty} />
         </ChartCard>
         <div style={{ marginTop: 12 }}>
           <DataTable<JailAttackTrend>
@@ -991,7 +991,7 @@ function NetworkSection({ result }: NetworkSectionProps) {
   return (
     <Flex vertical gap={16} className="fw-fade-in">
       <ChartCard title="封禁最多的网段（Top 10）">
-        <BaseChart option={subnetOption} height={280} empty={isEmptySeries(d.map((r) => r.total_bans))} />
+        <BaseChart option={subnetOption} height={280} title="封禁最多的网段（Top 10）" empty={isEmptySeries(d.map((r) => r.total_bans))} />
       </ChartCard>
       <DataTable<NetworkBlock>
         data={d}
@@ -1305,7 +1305,7 @@ function HistogramBlock({ result }: { result: UseAsyncResult<BanDurationHistogra
         封禁时长直方图
       </Typography.Title>
       <ChartCard title="按时长分布的封禁数" footnote={`合计 ${formatNumber(d.total)} 条`}>
-        <BaseChart option={option} height={260} empty={isEmptySeries(d.counts)} />
+        <BaseChart option={option} height={260} title="按时长分布的封禁数" empty={isEmptySeries(d.counts)} />
       </ChartCard>
     </div>
   )
@@ -1570,7 +1570,7 @@ function IpAnalysisDrawer({ ip, onClose }: IpAnalysisDrawerProps) {
                   </span>
                 }
               >
-                <BaseChart option={radar} height={280} />
+                <BaseChart option={radar} height={280} title="7 维风险分布" />
               </ChartCard>
             ) : (
               <EmptyState scenario="no-data" title="无风险向量数据" description="该 IP 暂无多维风险记录（可能未开启 risk_engine）" />

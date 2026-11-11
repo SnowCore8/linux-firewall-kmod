@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Tooltip } from 'antd'
 import type { SseConnectionState } from '../../hooks/useSse.ts'
+import { useSseConnection, useSseFreshness } from '../../providers/SseProvider.tsx'
 
 /**
  * 实时状态徽标 —— 把 SSE 连接生命周期翻译成一个「灯 + 文案」，全站统一。
@@ -107,5 +108,30 @@ export function RealtimeBadge({
         )}
       </span>
     </Tooltip>
+  )
+}
+
+/**
+ * 自订阅版徽标 —— 连接态与新鲜度直接从实时流 store 取，调用方不必把逐帧变化的
+ * `lastEventAt` 一层层传下来。这样「每秒最多 5 帧」只唤起重画这一个徽标，
+ * 而不是页面与外壳。
+ */
+export function LiveRealtimeBadge({
+  showLabel = true,
+  showFreshness = true,
+}: {
+  showLabel?: boolean
+  showFreshness?: boolean
+}) {
+  const connection = useSseConnection()
+  const freshness = useSseFreshness()
+  return (
+    <RealtimeBadge
+      state={connection.state}
+      lastEventAt={freshness.lastEventAt}
+      disconnectedAt={freshness.disconnectedAt}
+      showLabel={showLabel}
+      showFreshness={showFreshness}
+    />
   )
 }

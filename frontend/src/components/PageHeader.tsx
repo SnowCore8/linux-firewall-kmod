@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Breadcrumb, Flex, Space, Typography } from 'antd'
 import { Link } from 'react-router-dom'
-import { RealtimeBadge } from './state/RealtimeBadge.tsx'
+import { LiveRealtimeBadge, RealtimeBadge } from './state/RealtimeBadge.tsx'
 import type { SseConnectionState } from '../hooks/useSse.ts'
 
 /**
@@ -30,6 +30,11 @@ export interface PageHeaderProps {
   realtimeState?: SseConnectionState
   realtimeLastEventAt?: number
   realtimeDisconnectedAt?: number
+  /**
+   * 为 true 时徽标自行订阅实时流（连接态 + 新鲜度），调用方不必提供上面三个字段。
+   * 需要显示「x 秒前」的页面用它：逐帧时间戳只重画徽标，不重画整页。
+   */
+  realtimeLive?: boolean
   /** 标题下方的一整行自定义内容（如全局筛选工具条）。 */
   footer?: ReactNode
 }
@@ -42,6 +47,7 @@ export function PageHeader({
   realtimeState,
   realtimeLastEventAt,
   realtimeDisconnectedAt,
+  realtimeLive,
   footer,
 }: PageHeaderProps) {
   return (
@@ -60,9 +66,11 @@ export function PageHeader({
             <Typography.Title level={4} style={{ margin: 0 }}>
               {title}
             </Typography.Title>
-            {realtimeState && (
+            {realtimeLive ? (
+              <LiveRealtimeBadge />
+            ) : realtimeState ? (
               <RealtimeBadge state={realtimeState} lastEventAt={realtimeLastEventAt} disconnectedAt={realtimeDisconnectedAt} />
-            )}
+            ) : null}
           </Flex>
           {description && (
             <Typography.Text type="secondary" style={{ fontSize: 13 }}>

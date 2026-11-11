@@ -159,6 +159,20 @@ async function doFetch(url: string, opts: ApiRequestOptions): Promise<Response> 
 }
 
 /**
+ * 断言响应体是可用的 JSON 容器：对象或数组，且不是 null。
+ *
+ * 为什么只校验这一层：每个接口的字段形状由契约（`contract/*.fwidl` 生成的类型）保证，
+ * 前端再为几十个接口逐个手写 schema 只会与契约重复、并随契约漂移。但 `as T` 是纯编译期
+ * 断言，运行时什么都不查——后端若回了 `null` 或标量，`undefined` 会一路被当数据渲染，
+ * 表现为空白页而不是错误。这里把「载荷根本不像 JSON 容器」的情况拦成 ApiError，
+ * 让错误在 useAsync 里按既有错误态展示。
+ */
+function expectJsonContainer<T>(value: unknown, status: number, path: string): T {
+  if (value !== null && typeof value === 'object') return value as T
+  throw new ApiError('parse', `响应体不是 JSON 对象或数组：${path}`, status)
+}
+
+/**
  * 信封端点：解 `{code,data,message}`，成功回 data，失败按种类抛 ApiError。
  * 401 走纯文本分支并广播；其余非 2xx 若带合法信封则按业务码归类。
  */
@@ -186,14 +200,14 @@ export async function apiFetch<T>(path: string, opts: ApiRequestOptions = {}): P
   const envelope = body as Partial<ApiResponse<T>> | null
   if (envelope && typeof envelope === 'object' && 'code' in envelope) {
     if (res.ok && envelope.code === 0) {
-      return envelope.data as T
+      return expectJsonContainer<T>(envelope.data, res.status, path)
     }
     const message = envelope.message || `请求失败（业务码 ${envelope.code}）`
     throw new ApiError('business', message, res.status, envelope.code ?? 0)
   }
 
   // 不是信封形状：2xx 时按裸值交回（理论上信封端点不会走到），否则按 HTTP 归类
-  if (res.ok) return body as T
+  if (res.ok) return expectJsonContainer<T>(body, res.status, path)
   throw new ApiError('http', `HTTP ${res.status}`, res.status)
 }
 
@@ -204,8 +218,9 @@ export async function apiFetch<T>(path: string, opts: ApiRequestOptions = {}): P
 export async function apiFetchRaw<T>(path: string, opts: ApiRequestOptions = {}): Promise<T> {
   const res = await doFetch(buildUrl(path, opts.query), opts)
   try {
-    return (await res.json()) as T
-  } catch {
+    return expectJsonContainer<T>(await res.json(), res.status, path)
+  } catch (err) {
+    if (err instanceof ApiError) throw err
     throw new ApiError(
       res.ok ? 'parse' : 'http',
       res.ok ? '响应体不是合法 JSON' : `HTTP ${res.status}`,

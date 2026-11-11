@@ -21,7 +21,7 @@ import { useLiveData } from '../hooks/useLiveData.ts'
 import { useAsync } from '../hooks/useAsync.ts'
 import { useRefreshSignal } from '../hooks/useRefreshSignal.ts'
 import { useIsBelow } from '../hooks/useMediaQuery.ts'
-import { useSse, useSseDomain } from '../providers/SseProvider.tsx'
+import { useSseDomain } from '../providers/SseProvider.tsx'
 import { getStats, getRecidivism } from '../api/endpoints.ts'
 import { formatNumber, formatUptime } from '../lib/format.ts'
 import { emptyStats } from '../lib/defaults.ts'
@@ -45,7 +45,6 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const base = useChartBase()
   const isNarrow = useIsBelow('md')
-  const sseSnap = useSse()
   const statsDomain = useSseDomain('stats')
 
   const live = useLiveData<StatsResponse>({
@@ -120,13 +119,12 @@ export default function Dashboard() {
 
   return (
     <>
+      {/* 徽标自订阅连接态与新鲜度：本页只消费 stats 域，不因别的域推帧或时间戳刷新而重渲染 */}
       <PageHeader
         title="概览"
         description="威胁态势、实时速率与封禁趋势的一页总览"
         breadcrumb={[{ title: '总览' }, { title: '概览' }]}
-        realtimeState={sseSnap.state}
-        realtimeLastEventAt={sseSnap.lastEventAt}
-        realtimeDisconnectedAt={sseSnap.disconnectedAt}
+        realtimeLive
         extra={
           <Space>
             {/* 无条件渲染：外层条件为真时内层回退永远走不到，模块未加载就会整块消失 */}
@@ -173,7 +171,7 @@ export default function Dashboard() {
             }}
           >
             <ChartCard title="威胁态势" className="fw-threat-card">
-              <BaseChart option={gauge} height={200} />
+              <BaseChart option={gauge} height={200} title="威胁态势" />
               <Flex justify="center" gap={12} style={{ marginTop: 8 }}>
                 <Tag color={threatColor} style={{ fontWeight: 600, fontSize: 13, padding: '4px 12px' }}>
                   {threatLabel(stats.threat_level.level)}
@@ -258,12 +256,13 @@ export default function Dashboard() {
             }}
           >
             <ChartCard title="封禁趋势">
-              <BaseChart option={trendOption} height={240} empty={chartEmpty(stats.ban_trend)} loading={live.isRefreshing} />
+              <BaseChart option={trendOption} height={240} title="封禁趋势" empty={chartEmpty(stats.ban_trend)} loading={live.isRefreshing} />
             </ChartCard>
             <ChartCard title="失败尝试趋势">
               <BaseChart
                 option={failureTrendOption}
                 height={240}
+                title="失败尝试趋势"
                 empty={chartEmpty(stats.failed_attempts_trend)}
                 loading={live.isRefreshing}
               />
@@ -279,10 +278,10 @@ export default function Dashboard() {
             }}
           >
             <ChartCard title="Jail 分布">
-              <BaseChart option={jailOption} height={240} empty={chartEmpty(stats.jail_distribution)} />
+              <BaseChart option={jailOption} height={240} title="Jail 分布" empty={chartEmpty(stats.jail_distribution)} />
             </ChartCard>
             <ChartCard title="失败原因">
-              <BaseChart option={reasonOption} height={240} empty={chartEmpty(stats.failure_reasons)} />
+              <BaseChart option={reasonOption} height={240} title="失败原因" empty={chartEmpty(stats.failure_reasons)} />
             </ChartCard>
             <ChartCard
               title="Top 复发攻击源"
@@ -302,6 +301,7 @@ export default function Dashboard() {
                 <BaseChart
                   option={topOption}
                   height={240}
+                  title="Top 复发攻击源"
                   empty={topAttackers.data.top_recidivists.length === 0}
                   loading={topAttackers.isRefreshing}
                 />

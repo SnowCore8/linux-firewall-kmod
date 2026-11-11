@@ -71,6 +71,20 @@ body {
   border-radius: 2px;
 }
 
+/* --- 屏幕阅读器专用文本：视觉上不可见，但仍在无障碍树里（图表摘要、快捷键说明） --- */
+.fw-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* --- 实时状态灯 --- */
 .fw-dot {
   display: inline-block;

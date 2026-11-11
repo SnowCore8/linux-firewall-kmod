@@ -16,14 +16,14 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { NAV_GROUPS, NAV_ITEMS } from './nav.ts'
 import { useTheme } from '../providers/ThemeProvider.tsx'
 import { useAuth } from '../providers/AuthProvider.tsx'
-import { useSse } from '../providers/SseProvider.tsx'
+import { useSseConnection, useSseDomain } from '../providers/SseProvider.tsx'
 import { useNotify } from '../providers/NotificationProvider.tsx'
 import { useIsBelow } from '../hooks/useMediaQuery.ts'
 import { useHotkey, IS_MAC } from '../hooks/useHotkey.ts'
 import { usePersistentState } from '../hooks/usePersistentState.ts'
 import { emitRefresh } from '../lib/appEvents.ts'
 import { threatLabel, threatRank } from '../theme/tokens.ts'
-import { RealtimeBadge } from '../components/state/RealtimeBadge.tsx'
+import { LiveRealtimeBadge } from '../components/state/RealtimeBadge.tsx'
 import { NotificationCenter } from '../components/NotificationCenter.tsx'
 import { CommandPalette } from '../components/CommandPalette.tsx'
 import { ErrorBoundary } from '../providers/ErrorBoundary.tsx'
@@ -41,8 +41,9 @@ import type { SseConnectionState } from '../hooks/useSse.ts'
  * 顶栏聚合全局能力：命令面板入口（mod+K）、实时状态灯、主题/密度切换、通知中心、账户菜单。
  * 这些是「跨页常驻」的，放顶栏而非各页，保证在任何页面都能一键触达。
  *
- * 实时告警：外壳订阅 SSE 连接态与威胁等级，在**状态跃迁**时推通知（降级/重连/等级升高），
- * 让运维即便盯着别的页面也不会错过关键变化。跃迁去抖：只在真正变化时推一次。
+ * 实时告警：外壳只订阅**连接态**，在状态跃迁时推通知（降级/重连/恢复），
+ * 让运维即便盯着别的页面也不会错过关键变化。威胁等级告警依赖逐帧 stats 域，
+ * 放在 ThreatWatch 这个叶子组件里订阅，外壳本身不因域帧重渲染。
  */
 
 const { Header, Sider, Content } = Layout
@@ -88,7 +89,7 @@ export default function AppShell() {
   const navigate = useNavigate()
   const { isDark, toggleMode, density, toggleDensity } = useTheme()
   const { logout } = useAuth()
-  const sse = useSse()
+  const sseConn = useSseConnection()
   const { notify } = useNotify()
 
   const isMobile = useIsBelow('md')
@@ -134,10 +135,10 @@ export default function AppShell() {
   }, [location.pathname])
 
   // --- 实时告警：仅在状态跃迁时推通知 ---
-  const prevSseState = useRef<SseConnectionState>(sse.state)
+  const prevSseState = useRef<SseConnectionState>(sseConn.state)
   useEffect(() => {
     const prev = prevSseState.current
-    const now = sse.state
+    const now = sseConn.state
     if (prev === now) return
     prevSseState.current = now
     if (now === 'limit') {
@@ -157,29 +158,7 @@ export default function AppShell() {
     } else if (now === 'open' && prev !== 'connecting' && prev !== 'idle') {
       notify({ type: 'success', title: '实时连接已恢复', source: '实时流' })
     }
-  }, [sse.state, notify])
-
-  const prevThreatRank = useRef<number>(-1)
-  useEffect(() => {
-    const level = sse.stats?.threat_level?.level
-    if (!level) return
-    const rank = threatRank(level)
-    const prev = prevThreatRank.current
-    if (prev === -1) {
-      prevThreatRank.current = rank
-      return
-    }
-    if (rank > prev) {
-      notify({
-        type: rank >= 3 ? 'error' : 'warning',
-        title: `威胁等级升高至「${threatLabel(level)}」`,
-        message: '请关注概览与封禁页的实时变化。',
-        source: '威胁态势',
-        link: '/dashboard',
-      })
-    }
-    prevThreatRank.current = rank
-  }, [sse.stats?.threat_level?.level, notify])
+  }, [sseConn.state, notify])
 
   const userMenu = useMemo<MenuProps['items']>(
     () => [
@@ -303,14 +282,14 @@ export default function AppShell() {
           </Button>
 
           <Flex align="center" gap={4} style={{ marginLeft: 'auto' }}>
-            <RealtimeBadge state={sse.state} lastEventAt={sse.lastEventAt} disconnectedAt={sse.disconnectedAt} showLabel={!isMobile} />
-            {(sse.isLimited || sse.isExhausted) && (
-              <Tooltip title={sse.isExhausted ? '实时连接已断开，点击重试' : '实时连接已达上限，点击重试'}>
+            <LiveRealtimeBadge showLabel={!isMobile} />
+            {(sseConn.isLimited || sseConn.isExhausted) && (
+              <Tooltip title={sseConn.isExhausted ? '实时连接已断开，点击重试' : '实时连接已达上限，点击重试'}>
                 <Button
                   type="text"
                   size="small"
                   icon={<ReloadOutlined />}
-                  onClick={sse.reconnect}
+                  onClick={sseConn.reconnect}
                   aria-label="重试实时连接"
                 />
               </Tooltip>
@@ -350,8 +329,44 @@ export default function AppShell() {
       </Layout>
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onRefresh={emitRefresh} />
+      <ThreatWatch />
     </Layout>
   )
+}
+
+/**
+ * 威胁等级跃迁告警 —— 单独成叶子组件订阅 stats 域。
+ *
+ * 为什么不做在外壳里：stats 域每来一帧外壳就要渲染一次，连带整条路由页跟着重画；
+ * 而这里只关心一个等级字符串。拆出来以后，重渲染范围缩到这个返回 null 的组件。
+ */
+function ThreatWatch() {
+  const { notify } = useNotify()
+  const { value: stats } = useSseDomain('stats')
+  const level = stats?.threat_level?.level
+  const prevThreatRank = useRef<number>(-1)
+
+  useEffect(() => {
+    if (!level) return
+    const rank = threatRank(level)
+    const prev = prevThreatRank.current
+    if (prev === -1) {
+      prevThreatRank.current = rank
+      return
+    }
+    if (rank > prev) {
+      notify({
+        type: rank >= 3 ? 'error' : 'warning',
+        title: `威胁等级升高至「${threatLabel(level)}」`,
+        message: '请关注概览与封禁页的实时变化。',
+        source: '威胁态势',
+        link: '/dashboard',
+      })
+    }
+    prevThreatRank.current = rank
+  }, [level, notify])
+
+  return null
 }
 
 /**

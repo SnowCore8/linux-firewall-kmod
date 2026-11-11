@@ -166,6 +166,7 @@ function ChartFrame<T>({
       <BaseChart
         option={option}
         height={height}
+        title={typeof title === 'string' ? title : undefined}
         empty={empty}
         emptyText={emptyText}
         loading={query.isRefreshing}
@@ -723,6 +724,7 @@ function AnomalySection() {
           <BaseChart
             option={scoreOption}
             height={240}
+            title="全局异常分"
             empty={insufficient}
             emptyText="样本不足，暂无异常分"
             loading={anomalies.isRefreshing}
@@ -732,6 +734,7 @@ function AnomalySection() {
           <BaseChart
             option={radarOpt}
             height={240}
+            title="维度偏差"
             empty={data.global_dimensions.length === 0}
             emptyText="样本不足，暂无维度偏差"
             loading={anomalies.isRefreshing}

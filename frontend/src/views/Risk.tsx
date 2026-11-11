@@ -452,6 +452,7 @@ function RiskDetailDrawer({ ip, onClose }: RiskDetailDrawerProps) {
             <BaseChart
               option={radar ?? {}}
               height={280}
+              title="风险维度雷达"
               empty={allZero}
               emptyText="该 IP 暂无风险维度数据"
             />

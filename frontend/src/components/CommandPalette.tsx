@@ -13,7 +13,7 @@ import { useNavigate } from 'react-router-dom'
 import { NAV_ITEMS, type NavIcon } from '../app/nav.ts'
 import { useTheme } from '../providers/ThemeProvider.tsx'
 import { useAuth } from '../providers/AuthProvider.tsx'
-import { useSse } from '../providers/SseProvider.tsx'
+import { useSseConnection } from '../providers/SseProvider.tsx'
 
 /**
  * 命令面板（Ctrl/Cmd+K）—— 键盘全可达的跳转 + 快捷动作入口。
@@ -60,7 +60,7 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
   const navigate = useNavigate()
   const { toggleMode, toggleDensity, isDark, density } = useTheme()
   const { logout } = useAuth()
-  const sse = useSse()
+  const sseConn = useSseConnection()
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
@@ -142,7 +142,7 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
         id: 'act:logout',
         label: '退出登录',
         group: '账户',
-        hint: sse.isLive ? '实时流将断开' : undefined,
+        hint: sseConn.isLive ? '实时流将断开' : undefined,
         keywords: 'logout signout 登出 退出',
         icon: LogoutOutlined,
         run: () => {
@@ -153,7 +153,7 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
     ]
 
     return [...actionCmds, ...pageCmds]
-  }, [navigate, onClose, onRefresh, isDark, density, toggleMode, toggleDensity, logout, sse.isLive])
+  }, [navigate, onClose, onRefresh, isDark, density, toggleMode, toggleDensity, logout, sseConn.isLive])
 
   const filtered = useMemo(() => {
     const scored = commands
@@ -257,6 +257,7 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
           aria-controls="fw-cmd-listbox"
           aria-haspopup="listbox"
           aria-autocomplete="list"
+          aria-describedby="fw-cmd-hints"
           aria-activedescendant={
             ordered.length > 0 ? `fw-cmd-option-${Math.min(active, ordered.length - 1)}` : undefined
           }
@@ -334,7 +335,13 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
           ))
         )}
       </div>
+      {/* 键盘提示的可访问副本：视觉提示行屏幕阅读器读不到顺序语义，这里给输入框一段
+          aria-describedby 关联的完整说明（含 Esc 关闭），焦点进入时一并播报。 */}
+      <span id="fw-cmd-hints" className="fw-sr-only">
+        命令面板按键：上下方向键选择命令，Enter 执行当前命令，Esc 关闭命令面板；也可直接输入关键词搜索。
+      </span>
       <div
+        aria-hidden
         style={{
           padding: '8px 14px',
           borderTop: '1px solid var(--fw-border)',
