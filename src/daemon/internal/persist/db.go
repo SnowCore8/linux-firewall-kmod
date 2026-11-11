@@ -330,11 +330,15 @@ func (db *DB) CleanupExpired(retentionDays int) error {
 	return nil
 }
 
-func (db *DB) StartCleanupScheduler(interval time.Duration, retentionDays int, stopCh <-chan struct{}) {
+// StartCleanupScheduler 启动周期性清理过期记录的后台任务。
+// 返回的通道在 goroutine 退出后关闭；调用方应先等它关闭再关数据库，防止清理操作写到已关闭的连接。
+func (db *DB) StartCleanupScheduler(interval time.Duration, retentionDays int, stopCh <-chan struct{}) <-chan struct{} {
 	if interval <= 0 {
 		interval = 1 * time.Hour
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -348,4 +352,5 @@ func (db *DB) StartCleanupScheduler(interval time.Duration, retentionDays int, s
 			}
 		}
 	}()
+	return done
 }

@@ -153,16 +153,18 @@ func run(args []string) error {
 		} else {
 			defer db.Close()
 			dbStopCh := make(chan struct{})
-			db.StartCleanupScheduler(0, cfg.HistoryRetentionDays, dbStopCh)
-			db.StartReputationRecoveryScheduler(0, 1, 100, dbStopCh)
+			cleanupDone := db.StartCleanupScheduler(0, cfg.HistoryRetentionDays, dbStopCh)
+			recoveryDone := db.StartReputationRecoveryScheduler(0, 1, 100, dbStopCh)
 			// 判定层每行日志都要扣一次信誉分并立刻取分，直接查库会把入站主链路钉在磁盘上；
 			// 这里按 IP 折叠，与库自带的两个调度器共用同一条 stop 通道（关停时最后刷一次盘）。
 			facts = persist.NewFacts(db, persist.FactsOptions{Logger: logger})
 			factsDone := facts.StartFlusher(dbStopCh)
-			// 关停顺序：先停各调度器，再等 Facts 的最终刷盘结束，最后才关库。
+			// 关停顺序：先停各调度器，再等所有后台任务结束，最后才关库。
 			// 这段 defer 在 db.Close 之后登记，LIFO 执行时排在它前面。
 			defer func() {
 				close(dbStopCh)
+				<-cleanupDone
+				<-recoveryDone
 				<-factsDone
 			}()
 			historyDB = db

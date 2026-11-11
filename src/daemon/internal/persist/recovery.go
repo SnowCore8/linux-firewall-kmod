@@ -4,7 +4,9 @@ import (
 	"time"
 )
 
-func (db *DB) StartReputationRecoveryScheduler(interval time.Duration, recoveryRate int, maxScore int, stopCh <-chan struct{}) {
+// StartReputationRecoveryScheduler 启动周期性恢复信誉分的后台任务。
+// 返回的通道在 goroutine 退出后关闭；调用方应先等它关闭再关数据库，防止恢复操作写到已关闭的连接。
+func (db *DB) StartReputationRecoveryScheduler(interval time.Duration, recoveryRate int, maxScore int, stopCh <-chan struct{}) <-chan struct{} {
 	if interval <= 0 {
 		interval = 1 * time.Hour
 	}
@@ -14,7 +16,9 @@ func (db *DB) StartReputationRecoveryScheduler(interval time.Duration, recoveryR
 	if maxScore <= 0 {
 		maxScore = 100
 	}
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -31,4 +35,5 @@ func (db *DB) StartReputationRecoveryScheduler(interval time.Duration, recoveryR
 			}
 		}
 	}()
+	return done
 }
