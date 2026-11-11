@@ -5,7 +5,7 @@
 //   - 载荷一律走 analysis_payload.go 的具名 struct，不写 map[string]any；
 //   - 契约给某条路由没编 codes（ban-effectiveness / ban-duration-histogram / attack-geo），
 //     意思就是「这条路由不向调用方报业务错误」：读不到数据时在 200 里给出**空读数 +
-//     一句 summary**，而不是 500。其余各条按契约编的 50002（库未初始化）/50003（查询失败）
+//     一句 summary**，而不是 500。其余各条按契约编的 50002（查询失败）/50003（库未初始化）
 //     如实报错——把「查不到」伪造成「一切正常但没有数据」会让面板替运维做决定。
 package http
 
