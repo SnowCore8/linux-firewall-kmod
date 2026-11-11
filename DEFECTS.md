@@ -1,7 +1,7 @@
 # 功能缺陷清单
 
 > 生成时间：2026-11-11
-> 更新时间：2026-11-11（第四轮：内核屏障、守护进程健壮性、前端、构建文档四路修复落地）
+> 更新时间：2026-11-11（第五轮：内核状态恢复、采集轮转、配置写路径、实时流与统计缓存修复落地）
 > 状态标记：🔴 待修复 | 🟡 修复中 | 🟢 已修复 | ⚪ 设计取舍/复核为误报
 
 ---
@@ -11,12 +11,12 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 4 | 3 | 1 |
-| HIGH | 19 | 15 | 4 |
-| MEDIUM | 53 | 21 | 28 |
+| HIGH | 19 | 16 | 2 |
+| MEDIUM | 58 | 36 | 16 |
 | LOW | 57 | 2 | 55 |
-| **合计** | **133** | **41** | **88** |
+| **合计** | **138** | **57** | **74** |
 
-另有 4 项经复核为误报或设计取舍（标 ⚪），不计入待修复：M-1、M-10、M-D1、M-D5。
+另有 7 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-10、M-14、M-D1、M-D4、M-D5。
 
 ---
 
@@ -53,12 +53,9 @@
 - **文件**: `src/daemon/internal/runtime/executor.go:1138-1141`
 - **状态**: ✅ 已修复 — 统一使用 `.Unmap()` 后的 canonical 形式
 
-### H-3 🔴 SseProvider context 每帧触发全树重渲染
-- **文件**: `frontend/src/providers/SseProvider.tsx:55-63`
-- **问题**: 每秒最多 5 次全树重渲染
-- **影响**: 高频攻击时面板卡顿
-- **修复**: 拆分 context 或用 useSyncExternalStore
-- **难度**: 中 | **风险**: 中
+### H-3 🟢 SseProvider context 每帧触发全树重渲染
+- **文件**: `frontend/src/providers/SseProvider.tsx`
+- **状态**: ✅ 已修复 — 改外部 store + `useSyncExternalStore`：连接态只在跃迁、各域只在自身更新时换引用，逐帧时间戳只重画徽标；Provider 下发的 context 恒定，子树不再被带动
 
 ### H-4 🟢 useLiveData 用 JSON.stringify 做深比较
 - **文件**: `frontend/src/hooks/useLiveData.ts:50-61`
@@ -68,12 +65,9 @@
 - **文件**: `frontend/src/components/state/RealtimeBadge.tsx:80-84`
 - **状态**: ✅ 已修复 — 添加 SSE 连接状态依赖
 
-### H-6 🔴 认证锁定 DoS
+### H-6 ⚪ 认证锁定为进程级（契约约束的取舍）
 - **文件**: `src/daemon/internal/http/auth_lockout.go:22-62`
-- **问题**: 进程级单一计数器，10 次失败锁定所有请求
-- **影响**: 管理员被锁 60 秒
-- **修复**: 改为 per-IP 锁定
-- **难度**: 中 | **风险**: 中
+- **复核**: 按来源 IP 计数需要契约先定义「信任哪一层代理的 X-Forwarded-For」；`contract/http.fwidl` 未给出该边界，按 IP 切分反而让攻击者用伪造头绕过锁定。现实现按进程单账本计数，是契约口径下的正确落点。若要改 per-IP，必须先在契约里写清可信代理。
 
 ### H-7 🟢 白名单删除内核失败不回滚
 - **文件**: `src/daemon/internal/http/whitelist.go:100-130`
@@ -139,7 +133,7 @@
 
 ---
 
-## MEDIUM 级（53 项）
+## MEDIUM 级（58 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -155,38 +149,42 @@
 | M-K1 | `fw_rate.c:753-763` | rate_window 读侧缺 READ_ONCE 配对 | 🟢 已修复 |
 | M-K2 | `fw_rate.c:589-592` | window_start/last_activity 缺 WRITE_ONCE | 🟢 已修复 |
 | M-K3 | `fw_netlink.c:1064-1078` | netlink 消息缺 NLMSG_ALIGN 对齐 | 🟢 已修复（并对末条报文按剩余长度截断） |
-| M-K4 | `fw_state.c:572-576` | 恢复时 filp_open 的任何错误都当「首次启动无文件」吞掉，EACCES/EIO 被静默 | 🔴 |
-| M-K5 | `fw_state.c:565-576` | 恢复标记先于路径校验与打开置位，修正模块参数后无法再恢复 | 🔴 |
+| M-K4 | `fw_state.c:589-602` | 恢复时 filp_open 的任何错误都当「首次启动无文件」吞掉，EACCES/EIO 被静默 | 🟢 已修复（仅 ENOENT 按首启处理，其余报具体 errno 并让 insmod 失败） |
+| M-K5 | `fw_state.c:699-709` | 恢复标记先于路径校验与打开置位，修正模块参数后无法再恢复 | 🟢 已修复（失败路径 clear_bit，可重试；新增空文件/短读校验） |
 
 ### 守护进程（10 项）
 | # | 文件 | 问题 | 状态 |
 |---|------|------|------|
 | M-5 | `runtime/executor.go:431-447` | poll 把 POLLHUP/POLLERR 当数据 | 🟢 已修复（只认 POLLIN，错误走终止路径） |
 | M-6 | `runtime/file_reloader.go:20` | logger 为 nil 时无防护 | 🟢 已修复 |
-| M-7 | `config/default.yaml` | 默认凭据 admin/changeme 无启动告警 | 🔴 |
+| M-7 | `cmd/firewall-daemon/main.go` | 默认凭据 admin/changeme 无启动告警 | 🟢 已修复（用户名与密码两个维度分别告警，绝不打印凭据值） |
 | M-8 | `http/auth.go` | 认证锁定机制无集成测试 | 🔴 |
-| M-9 | `http/bans.go:233-241` | 内核解封失败只记日志不回传前端 | 🔴 |
+| M-9 | `http/bans.go` | 内核解封失败只记日志不回传前端 | 🟢 已修复（先下内核，失败回 40002 并保留镜像；补契约测试） |
 | M-10 | `kernel/client.go:190-217` | Ban 返回 Delivered 非 Executed | ⚪ 设计取舍 |
 | M-11 | `persist/facts.go:296-301` | 风险事件队列高负载下静默丢事件 | 🔴 |
 | M-12 | `logger/logger.go:225-238` | LogThrottler TOCTOU 竞态 | 🟢 已修复（CAS 循环） |
 | M-13 | `geoip/egress.go:73-97` | egress probe 接受私有 IP | 🟢 已修复（只收公网单播，补单测） |
-| M-14 | `persist/db.go:207` | SQL ALTER TABLE 字符串拼接 | 🔴 |
+| M-14 | `persist/db.go:207` | SQL ALTER TABLE 字符串拼接 | ⚪ 复核：三个实参均为 db.go:162-167 的常量字面量，不接受外部输入；pragma 查询已用绑定参数 |
 
-### 守护进程深层（6 项）
+### 守护进程深层（10 项）
 | # | 文件 | 问题 | 状态 |
 |---|------|------|------|
 | M-D1 | `sse.go:228-278` | SSE Broker run() 过早退出 | ⚪ 复核：退出路径均由 Stop() 接管 |
 | M-D2 | `db.go:284-331` | CleanupExpired 五条 DELETE 无事务 | 🟢 已修复（单事务，补回滚测试） |
-| M-D3 | `manager.go:299-302` | FeedManager.Stop() 不等待 in-flight | 🔴 |
-| M-D4 | `executor.go:884-906` | 配置重载失败未显式回滚 | 🔴 |
+| M-D3 | `manager.go`, `scheduler.go` | FeedManager.Stop() 不等待 in-flight | 🟢 已修复（doneCh + sync.Once；Stop 先 cancel 再等待调度器退出） |
+| M-D4 | `executor.go:884-906` | 配置重载失败未显式回滚 | ⚪ 复核：`fileReloader.Reload` 只写临时 newCfg，校验全部通过后才 `*cfg = newCfg`；失败时 e.cfg 未动 |
 | M-D5 | `retry_queue.go:299-325` | flush() DB 不可用时丢失任务 | ⚪ 复核：Stop() 随后 persist 快照，不丢 |
 | M-D6 | `http/logs.go:319-341` | 日志流生产者退出后连接悬挂，只发心跳占名额 | 🟢 已修复（生产者退出即关闭发送通道） |
+| M-D7 | `http/config_api.go:197-236` | 配置文件直接截断写，崩溃/磁盘满留下半份 YAML，下次启动或重载起不来 | 🟢 已修复（同目录临时文件 + Sync + rename，沿用旧文件权限） |
+| M-D8 | `http/config_api.go:98-109` | 并发局部更新在锁外基于旧值合并，后写请求把先写字段覆盖回旧值 | 🟢 已修复（合并/校验移入 configFileMu，以锁内现值为底） |
+| M-D9 | `ingest/reader.go:103-160` | inode 轮转时直接关旧 fd，最后一次读取后写入的行整段丢失 | 🟢 已修复（先按偏移读完旧 fd，旧尾巴 Rotated=false 分批交出，读干后才切换） |
+| M-D10 | `http/stats.go:177-218` | SSE 每帧重查 7 天活动行；近 5 分钟计数查询失败把 0 当有效读数缓存 30 秒 | 🟢 已修复（活动行按 30 秒缓存；任一窗口查询失败不落缓存） |
 
 ### 前端（6 项）
 | # | 文件 | 问题 | 状态 |
 |---|------|------|------|
-| M-15 | `BaseChart.tsx` | Canvas 图表无文本替代 | 🔴 |
-| M-16 | `CommandPalette.tsx` | 键盘操作提示仅视觉可见 | 🔴 |
+| M-15 | `BaseChart.tsx` | Canvas 图表无文本替代 | 🟢 已修复（按 option 生成 aria-label + 隐藏摘要，覆盖折线/柱/饼/仪表/雷达/热力） |
+| M-16 | `CommandPalette.tsx` | 键盘操作提示仅视觉可见 | 🟢 已修复（aria-describedby 关联含 Esc 的完整说明，视觉提示行 aria-hidden） |
 | M-17 | `Dashboard.tsx:132-136` | kernel_version 回退逻辑死代码 | 🟢 已修复（Tag 无条件渲染） |
 | M-18 | `endpoints.ts:456` | syncThreatFeeds 未传 signal | 🟢 已修复（按钮与深链均传 AbortSignal） |
 | M-19 | `useAsync.ts:161-173` | 非 ApiError 异常静默包装 | 🟢 已修复（保留原 message，DEV 打原错误） |
@@ -198,10 +196,10 @@
 | M-F1 | `usePersistentState.ts:58-59` | 忽略跨 tab 的删除事件 | 🟢 已修复（回退初始值） |
 | M-F2 | `DrawerForm.tsx:61-77` | 提交存在双次点击窗口 | 🟢 已修复（入口先置 submitting，取消确认时复位） |
 | M-F3 | `NotificationProvider.tsx:92-103` | clear 依赖 items 导致 context 不稳定 | 🟢 已修复（itemsRef） |
-| M-F4 | `useSse.ts:147-149` | SSE 重连后不立即触发数据校准 | 🔴 |
+| M-F4 | `useSse.ts` | SSE 重连后不立即触发数据校准 | 🟢 已修复（断线过才在重连成功时广播刷新，首次连接不重复拉取） |
 | M-F5 | `ErrorBoundary.tsx:34-37` | 无错误持久化或上报 | 🔴 |
-| M-F6 | `useSse.ts:92` | JSON.parse as T 类型断言未验证 | 🔴 |
-| M-F7 | `api/client.ts:189,196,207` | API 响应 as T 断言未验证 | 🔴 |
+| M-F6 | `useSse.ts:107-122` | JSON.parse as T 类型断言未验证 | 🟢 已修复（按域校验容器形状，坏帧丢弃并 DEV 告警） |
+| M-F7 | `api/client.ts:170-173` | API 响应 as T 断言未验证 | 🟢 已修复（统一校验非 null 对象/数组，形状错误抛 ApiError） |
 
 ### 跨模块（2 项）
 | # | 问题 | 状态 |
@@ -352,14 +350,21 @@ C-1、C-3、H-1、H-2、H-4、H-5、H-7
 ### 批次 2（已提交）：并发与内核发送锁 12 项
 C-4、H-8、H-9、H-12、H-13、H-14、H-15、H-16、H-17、H-18、M-F1、M-F2
 
-### 批次 3（本轮）：四路并行 22 项
+### 批次 3（已提交）：四路并行 23 项
 - 内核：M-K1、M-K2、M-K3、L-K4
 - 守护进程：M-5、M-6、M-12、M-13、M-D2、H-19、M-D6
 - 前端：M-17、M-18、M-19、M-20、M-F3、L-F9
 - 构建/文档：M-B1、M-B2、M-B3、M-B4、M-B5、M-B6
 
+### 批次 4（已提交）：内核状态恢复与守护进程写路径 9 项
+- 内核：M-K4、M-K5
+- 守护进程：M-7、M-9、M-D3、M-D7、M-D8、M-D9、M-D10
+
+### 批次 5（已提交）：前端实时流与无障碍 6 项
+- H-3、M-F4、M-F6、M-F7、M-15、M-16
+
 ### 待修复重点（按风险排序）
-1. **HIGH**：C-2、H-3、H-6、H-10、H-11
-2. **MEDIUM 数据正确性**：M-11、M-14、M-D3、M-D4、M-K4、M-K5
-3. **MEDIUM 安全**：M-7、M-8、M-9、M-15、M-16
-4. **测试缺口**：M-T1~M-T5、M-21
+1. **CRITICAL/HIGH**：C-2、H-10、H-11
+2. **MEDIUM 安全/数据正确性**：M-2、M-3、M-4、M-8、M-11、M-F5
+3. **跨模块与构建**：M-21、M-22、M-B7
+4. **测试缺口**：M-T1~M-T5、M-E1、M-E2
