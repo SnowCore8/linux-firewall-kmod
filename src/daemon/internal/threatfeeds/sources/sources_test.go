@@ -223,3 +223,96 @@ func TestParseSourcesSkipOversizedLine(t *testing.T) {
 		t.Fatalf("FeodoSource.Parse() 错误 = %v", err)
 	}
 }
+
+// TestParseIPListPrefixLimits 钉住前缀下限：IPv4 至少 /8、IPv6 至少 /16，
+// 且任何 0.0.0.0/x、::/x 的未指定网段一律拒绝。上限内的网段原样保留。
+func TestParseIPListPrefixLimits(t *testing.T) {
+	expiresAt := time.Now().Add(time.Hour)
+	tests := []struct {
+		entry string
+		want  bool
+	}{
+		{"0.0.0.0/0", false},
+		{"10.0.0.0/7", false},
+		{"10.0.0.0/8", true},
+		{"0.0.0.0/8", false},
+		{"::/0", false},
+		{"2001:db8::/15", false},
+		{"::/16", false},
+		{"2001:db8::/16", true},
+		{"1.2.3.4/32", true},
+		{"1.2.3.0/24", true},
+		{"2001:db8::/48", true},
+		{"2001:db8::1/128", true},
+		{"0.0.0.0", false},
+		{"::", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.entry, func(t *testing.T) {
+			entries, err := parseIPList([]byte(tt.entry+"\n"), "test", "abuse", 0.8, expiresAt)
+			if err != nil {
+				t.Fatalf("parseIPList() 错误 = %v", err)
+			}
+			got := len(entries) == 1
+			if got != tt.want {
+				t.Fatalf("条目 %q 是否接受 = %v，想要 %v（返回 %d 条）", tt.entry, got, tt.want, len(entries))
+			}
+			if got && entries[0].IP.String() != tt.entry {
+				t.Errorf("保留的条目 = %s，想要 %s", entries[0].IP, tt.entry)
+			}
+		})
+	}
+}
+
+// TestSourcesRejectUnsuitablePrefixes 核对五个源适配器都走同一前缀校验：
+// 0.0.0.0/0 与 ::/0 被丢弃，同批 /24 与 /48 照常保留。
+func TestSourcesRejectUnsuitablePrefixes(t *testing.T) {
+	cases := []struct {
+		name  string
+		data  string
+		parse func([]byte) ([]FeedEntry, error)
+	}{
+		{
+			name:  "firehol",
+			data:  "0.0.0.0/0\n::/0\n198.51.100.0/24\n2001:db8::/48\n",
+			parse: NewFireHOLSource("firehol", "", "abuse", 0.85).Parse,
+		},
+		{
+			name:  "blocklist_de",
+			data:  "0.0.0.0/0\n::/0\n198.51.100.0/24\n2001:db8::/48\n",
+			parse: NewBlocklistSource("", "abuse", 0.75).Parse,
+		},
+		{
+			name:  "dshield",
+			data:  "0.0.0.0/0\t1\tx\n::/0\t1\tx\n198.51.100.0/24\t1\tx\n2001:db8::/48\t1\tx\n",
+			parse: NewDShieldSource("", "scanner", 0.7).Parse,
+		},
+		{
+			name:  "ipsum",
+			data:  "0.0.0.0/0\t5\n::/0\t5\n198.51.100.0/24\t5\n2001:db8::/48\t5\n",
+			parse: NewIpsumSource("", "abuse", 0.8).Parse,
+		},
+		{
+			name:  "feodo",
+			data:  "2026-11-01,0.0.0.0/0,443,x,malware,online\n2026-11-01,::/0,443,x,malware,online\n2026-11-01,198.51.100.0/24,443,x,malware,online\n2026-11-01,2001:db8::/48,443,x,malware,online\n",
+			parse: NewFeodoSource("", "botnet", 0.9).Parse,
+		},
+	}
+	want := []string{"198.51.100.0/24", "2001:db8::/48"}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			entries, err := tc.parse([]byte(tc.data))
+			if err != nil {
+				t.Fatalf("Parse() 错误 = %v", err)
+			}
+			if len(entries) != len(want) {
+				t.Fatalf("Parse() 返回 %d 条，想要 %d 条", len(entries), len(want))
+			}
+			for i, w := range want {
+				if got := entries[i].IP.String(); got != w {
+					t.Errorf("entries[%d].IP = %s，想要 %s", i, got, w)
+				}
+			}
+		})
+	}
+}

@@ -1,7 +1,6 @@
 package sources
 
 import (
-	"net/netip"
 	"strings"
 	"time"
 )
@@ -10,6 +9,7 @@ import (
 // Feodo 格式：First seen,IP address,Port,Domain,Malware,Status
 func parseCSV(data []byte, source, category string, confidence float64, expiresAt time.Time) ([]FeedEntry, error) {
 	var entries []FeedEntry
+	rejected := 0
 	err := forEachLine(data, func(raw string) {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -32,23 +32,18 @@ func parseCSV(data []byte, source, category string, confidence float64, expiresA
 			return
 		}
 
-		if addr, err := netip.ParseAddr(ipStr); err == nil {
-			bits := 32
-			if addr.Is6() {
-				bits = 128
-			}
-			entries = append(entries, FeedEntry{
-				IP:         netip.PrefixFrom(addr, bits),
-				Source:     source,
-				Category:   category,
-				Confidence: confidence,
-				ExpiresAt:  expiresAt,
-			})
+		entry, ok, bad := parseFeedEntry(ipStr, source, category, confidence, expiresAt)
+		if bad {
+			rejected++
+		}
+		if ok {
+			entries = append(entries, entry)
 		}
 	})
 	if err != nil {
 		return nil, err
 	}
+	logRejectedPrefixes(source, rejected)
 	return entries, nil
 }
 

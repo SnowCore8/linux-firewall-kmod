@@ -1,7 +1,6 @@
 package sources
 
 import (
-	"net/netip"
 	"strings"
 	"time"
 )
@@ -9,6 +8,7 @@ import (
 // parseTSV 解析 TSV 格式（Tab 分隔），用于 DShield 等。
 func parseTSV(data []byte, source, category string, confidence float64, expiresAt time.Time) ([]FeedEntry, error) {
 	var entries []FeedEntry
+	rejected := 0
 	err := forEachLine(data, func(raw string) {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -25,36 +25,18 @@ func parseTSV(data []byte, source, category string, confidence float64, expiresA
 			return
 		}
 
-		// 尝试解析为 CIDR
-		if prefix, err := netip.ParsePrefix(ipStr); err == nil {
-			entries = append(entries, FeedEntry{
-				IP:         prefix,
-				Source:     source,
-				Category:   category,
-				Confidence: confidence,
-				ExpiresAt:  expiresAt,
-			})
-			return
+		entry, ok, bad := parseFeedEntry(ipStr, source, category, confidence, expiresAt)
+		if bad {
+			rejected++
 		}
-
-		// 尝试解析为单个 IP
-		if addr, err := netip.ParseAddr(ipStr); err == nil {
-			bits := 32
-			if addr.Is6() {
-				bits = 128
-			}
-			entries = append(entries, FeedEntry{
-				IP:         netip.PrefixFrom(addr, bits),
-				Source:     source,
-				Category:   category,
-				Confidence: confidence,
-				ExpiresAt:  expiresAt,
-			})
+		if ok {
+			entries = append(entries, entry)
 		}
 	})
 	if err != nil {
 		return nil, err
 	}
+	logRejectedPrefixes(source, rejected)
 	return entries, nil
 }
 

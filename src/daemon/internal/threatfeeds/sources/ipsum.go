@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"log/slog"
 	"net/netip"
 	"strings"
 	"time"
@@ -59,9 +60,78 @@ func forEachLine(data []byte, fn func(string)) error {
 	}
 }
 
+// 情报条目的前缀长度下限：IPv4 /8、IPv6 /16。
+//
+// 缓存按网段匹配（cache.go 的 Lookup 用前缀长度分桶），一条 /0 能命中任意源 IP；
+// 而置信度 ≥ 0.8 的源命中即直封（runtime/pipeline.go 的 feedBanConfidence），
+// 一条超宽网段会把受监视日志里首次出现的任意源 IP 全部封掉。
+const (
+	minIPv4PrefixBits = 8
+	minIPv6PrefixBits = 16
+)
+
+// isUsablePrefix 判断前缀是否足够窄、且不是未指定地址网段。
+//
+// 未指定地址按掩码后判断，0.0.0.0/x 与 ::/x 的任何长度都算未指定，避免一条
+// 0.0.0.0/8 借「长度合规」命中 0.0.0.0/8 内的所有地址。
+func isUsablePrefix(prefix netip.Prefix) bool {
+	if !prefix.IsValid() {
+		return false
+	}
+	if prefix.Addr().IsUnspecified() || prefix.Masked().Addr().IsUnspecified() {
+		return false
+	}
+	if prefix.Addr().Is4() {
+		return prefix.Bits() >= minIPv4PrefixBits
+	}
+	return prefix.Bits() >= minIPv6PrefixBits
+}
+
+// parseFeedEntry 把一行文本解析为情报条目，是所有源适配器共用的唯一入口。
+//
+// ok=false 表示文本不是合法 IP/CIDR；rejected=true 表示语法合法但被前缀长度下限
+// 或未指定网段规则拒绝，调用方据此计数上报，不静默丢弃。
+func parseFeedEntry(text, source, category string, confidence float64, expiresAt time.Time) (FeedEntry, bool, bool) {
+	prefix, err := netip.ParsePrefix(text)
+	if err != nil {
+		addr, addrErr := netip.ParseAddr(text)
+		if addrErr != nil {
+			return FeedEntry{}, false, false
+		}
+		bits := 32
+		if addr.Is6() {
+			bits = 128
+		}
+		prefix = netip.PrefixFrom(addr, bits)
+	}
+	if !isUsablePrefix(prefix) {
+		return FeedEntry{}, false, true
+	}
+	return FeedEntry{
+		IP:         prefix,
+		Source:     source,
+		Category:   category,
+		Confidence: confidence,
+		ExpiresAt:  expiresAt,
+	}, true, false
+}
+
+// logRejectedPrefixes 在本次解析有被前缀规则拒绝的条目时上报一次，避免逐行刷屏。
+func logRejectedPrefixes(source string, rejected int) {
+	if rejected == 0 {
+		return
+	}
+	slog.Warn("情报源条目被前缀下限或未指定网段规则拒绝",
+		"source", source,
+		"count", rejected,
+		"min_ipv4_bits", minIPv4PrefixBits,
+		"min_ipv6_bits", minIPv6PrefixBits)
+}
+
 // parseIPList 解析纯 IP 列表（每行一个 IP 或 CIDR）。
 func parseIPList(data []byte, source, category string, confidence float64, expiresAt time.Time) ([]FeedEntry, error) {
 	var entries []FeedEntry
+	rejected := 0
 	err := forEachLine(data, func(raw string) {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -76,36 +146,18 @@ func parseIPList(data []byte, source, category string, confidence float64, expir
 			return
 		}
 
-		// 尝试解析为 CIDR
-		if prefix, err := netip.ParsePrefix(line); err == nil {
-			entries = append(entries, FeedEntry{
-				IP:         prefix,
-				Source:     source,
-				Category:   category,
-				Confidence: confidence,
-				ExpiresAt:  expiresAt,
-			})
-			return
+		entry, ok, bad := parseFeedEntry(line, source, category, confidence, expiresAt)
+		if bad {
+			rejected++
 		}
-
-		// 尝试解析为单个 IP
-		if addr, err := netip.ParseAddr(line); err == nil {
-			bits := 32
-			if addr.Is6() {
-				bits = 128
-			}
-			entries = append(entries, FeedEntry{
-				IP:         netip.PrefixFrom(addr, bits),
-				Source:     source,
-				Category:   category,
-				Confidence: confidence,
-				ExpiresAt:  expiresAt,
-			})
+		if ok {
+			entries = append(entries, entry)
 		}
 	})
 	if err != nil {
 		return nil, err
 	}
+	logRejectedPrefixes(source, rejected)
 	return entries, nil
 }
 
@@ -132,6 +184,7 @@ func (s *IpsumSource) URL() string { return s.url }
 func (s *IpsumSource) Parse(data []byte) ([]FeedEntry, error) {
 	expiresAt := time.Now().Add(25 * time.Hour)
 	var entries []FeedEntry
+	rejected := 0
 	err := forEachLine(data, func(raw string) {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -144,22 +197,17 @@ func (s *IpsumSource) Parse(data []byte) ([]FeedEntry, error) {
 		if line == "" {
 			return
 		}
-		if addr, err := netip.ParseAddr(line); err == nil {
-			bits := 32
-			if addr.Is6() {
-				bits = 128
-			}
-			entries = append(entries, FeedEntry{
-				IP:         netip.PrefixFrom(addr, bits),
-				Source:     s.Name(),
-				Category:   s.category,
-				Confidence: s.confidence,
-				ExpiresAt:  expiresAt,
-			})
+		entry, ok, bad := parseFeedEntry(line, s.Name(), s.category, s.confidence, expiresAt)
+		if bad {
+			rejected++
+		}
+		if ok {
+			entries = append(entries, entry)
 		}
 	})
 	if err != nil {
 		return nil, err
 	}
+	logRejectedPrefixes(s.Name(), rejected)
 	return entries, nil
 }
