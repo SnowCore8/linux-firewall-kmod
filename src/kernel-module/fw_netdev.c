@@ -42,7 +42,7 @@
 #define FW_NETDEV_WL_PAGE 128
 #define FW_NETDEV_MAX_PASSES 64
 
-/* 自动条目的标记：既非 manual（用户手工）也非 restored（状态恢复） */
+/* 自动条目的标记：设备名非空且既非 manual（用户手工）也非 restored（状态恢复） */
 #define FW_NETDEV_DEV_MANUAL "manual"
 #define FW_NETDEV_DEV_RESTORED "restored"
 
@@ -181,6 +181,16 @@ static int fw_netdev_snapshot_build(struct fw_netdev_snapshot *s) {
  * ==========================================================================*/
 
 static bool fw_netdev_dev_is_auto(const char *name) {
+  /*
+   * 空串不能算自动条目：契约里空 device 表示「不限定设备」
+   * （contract/netlink.fwidl: 空串表示不限定设备），daemon 的 trusted_ips 与
+   * 面板白名单都以空设备名下发。若把空串当自动，任何 netdev 事件触发的对账
+   * 都会把这些用户信任的条目删掉，可信地址随即重新参与封禁判定。
+   * 只有带具体设备名（接口派生）或明确标记为自动的条目才允许被对账清理；
+   * manual / restored 永不自动删除。
+   */
+  if (!name[0])
+    return false;
   return strcmp(name, FW_NETDEV_DEV_MANUAL) != 0 &&
          strcmp(name, FW_NETDEV_DEV_RESTORED) != 0;
 }

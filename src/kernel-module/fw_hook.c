@@ -172,7 +172,7 @@ static unsigned int fw_hook_ipv4(void *priv, struct sk_buff *skb,
   const struct iphdr *iph;
   struct fw_stats_pcpu *s;
   __be32 src;
-  u32 pkt_len;
+  u32 pkt_len, hdr_len;
   u8 proto, tcp_flags = 0, icmp_type = 0, icmp_code = 0;
   u16 dst_port = 0;
   bool is_fragment, is_udp = false, is_icmp = false;
@@ -197,15 +197,34 @@ static unsigned int fw_hook_ipv4(void *priv, struct sk_buff *skb,
   if (unlikely(!pskb_may_pull(skb, sizeof(struct iphdr))))
     return NF_ACCEPT;
 
-  iph = skb_header_pointer(skb, 0, sizeof(iph_copy), iph_copy);
+  /* 第一次取头只要固定 20 字节基本头：无选项时 IPv4 头就是 20 字节，裸 SYN
+   * 报文头 40 字节、小 UDP/ICMP 报文也可能不足 60 字节。若一次性索要 60 字节，
+   * skb_header_pointer 在 offset + len > skb->len 时返回 NULL，这些最常见的
+   * 洪泛报文会被整体放行，既进不了封禁表也进不了速率判定。 */
+  iph = skb_header_pointer(skb, 0, sizeof(*iph), iph_copy);
   if (unlikely(!iph))
     return NF_ACCEPT;
 
   if (unlikely(iph->version != 4 || iph->ihl < 5))
     return NF_ACCEPT;
 
+  hdr_len = (u32)iph->ihl * 4;
+  /* ihl 是 4 位字段（最大 15），hdr_len 不得超过 60 字节栈缓冲，否则下面按
+   * ihl*4 取头与 ip_fast_csum 会越界读。 */
+  if (unlikely(iph->ihl > 15 || hdr_len > sizeof(iph_copy)))
+    return NF_ACCEPT;
+
   pkt_len = ntohs(iph->tot_len);
-  if (unlikely(iph->ihl * 4 > pkt_len || pkt_len > skb->len))
+  if (unlikely(hdr_len > pkt_len || pkt_len > skb->len))
+    return NF_ACCEPT;
+
+  /* 第二次取头：线性化到 ihl*4 后按实际头长取完整头。pskb_may_pull 可能重新
+   * 分配 head，之前取到的 iph 指针随即失效，故必须重新取头再使用。 */
+  if (unlikely(!pskb_may_pull(skb, hdr_len)))
+    return NF_ACCEPT;
+
+  iph = skb_header_pointer(skb, 0, hdr_len, iph_copy);
+  if (unlikely(!iph))
     return NF_ACCEPT;
 
   /* 硬件已校验的报文跳过软件校验和 */
