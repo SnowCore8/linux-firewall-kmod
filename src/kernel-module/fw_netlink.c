@@ -821,13 +821,32 @@ static void fw_nl_handle_whitelist(u32 portid, u16 type, u8 af, const void *addr
   int ret;
 
   /*
+   * 地址校验必须在归一化前做：主机的原始地址决定它是不是 0.0.0.0 / :: / 回环 /
+   * 组播这类不可作为白名单目标的地址。归一化后还要再查一次，因为 1.2.3.4/0 这种
+   * 请求会归一化成 0.0.0.0/0 / ::/0——它覆盖全部地址（白名单短路一切封禁），
+   * 删除时还会经 fw_wl_remove → fw_ban_del_matching 的前缀匹配清空整张封禁表。
+   * 前缀长度与地址族也要在这里挡：fw_addr_normalize 按 prefix_len 算掩码，
+   * 越界前缀是未定义移位。
+   */
+  if ((af != FW_AF_INET && af != FW_AF_INET6) ||
+      prefix_len > fw_max_prefix_len(af) || !fw_addr_is_valid(af, addr)) {
+    fw_nl_send_cmd_result(portid, type, -EINVAL, af, addr);
+    return;
+  }
+
+  /*
    * 入参约定是**已归一化**地址：fw_wl_add / fw_wl_remove 按 (af, 归一化地址,
    * prefix_len) 去重、并按归一化地址查删。procfs 路径自归一化，netdev 路径由
    * fw_netdev.c 保证；这条若漏了，加 <网络地址>/<prefix> 会入表成主机位非零的
    * 键——与 procfs 加的同一子网各占一条，且按网络地址 remove 查不到。故这里与
    * procfs 同序归一化，且是原地改：后续的移表与事件推送都用归一化值。
+   * 归一化会把主机位清零，故需再次校验（见上）。
    */
   fw_addr_normalize(af, (void *)addr, prefix_len);
+  if (!fw_addr_is_valid(af, addr)) {
+    fw_nl_send_cmd_result(portid, type, -EINVAL, af, addr);
+    return;
+  }
 
   if (adding)
     ret = fw_wl_add(af, addr, prefix_len, device[0] ? device : NULL);
@@ -947,8 +966,7 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
           spin_lock_irqsave(&fw_nl_daemon_lock, flags);
           /* 探活期间可能有第三个 daemon 抢先注册，需重新校验 */
           if (fw_nl_daemon_portid != old_portid && fw_nl_daemon_portid != portid) {
-            pr_warn("netlink: 注册期间 portid 已变更为 %u，放弃注册\n",
-                    fw_nl_daemon_portid);
+            pr_warn("netlink: 注册期间 portid 已变更为 %u，放弃注册\n", fw_nl_daemon_portid);
             spin_unlock_irqrestore(&fw_nl_daemon_lock, flags);
             fw_nl_send_register_ack(portid, be32_to_cpu(h->seq), 0);
             goto next;

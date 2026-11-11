@@ -150,8 +150,7 @@ static unsigned int fw_ban_check(u8 af, const void *src, u32 packet_len,
       duration = READ_ONCE(fw_ban_time);
 
     /* 自决封禁针对单个源 IP：全长前缀（精确单机），网段封禁只由 daemon 下发 */
-    add_ret =
-      fw_ban_try_add(af, src, prefix_len, duration, reason, FW_HOOK_DDOS_JAIL, false);
+    add_ret = fw_ban_try_add(af, src, prefix_len, duration, reason, FW_HOOK_DDOS_JAIL, false);
     /*
      * 发送保护：netfilter 钩子在 softirq 上下文中执行，使用 trylock 避免休眠。
      * 获取失败时跳过事件推送，不影响丢包判定。封禁成功时在同一个 trylock 内
@@ -160,8 +159,8 @@ static unsigned int fw_ban_check(u8 af, const void *src, u32 packet_len,
     if (fw_nl_send_trylock()) {
       if (fw_nl_sock_available()) {
         if (add_ret == 0)
-          fw_nl_send_ban_state_change(FW_BAN_ACTION_BAN, af, prefix_len, src, duration,
-                                      reason, FW_HOOK_DDOS_JAIL);
+          fw_nl_send_ban_state_change(FW_BAN_ACTION_BAN, af, prefix_len, src,
+                                      duration, reason, FW_HOOK_DDOS_JAIL);
         fw_nl_send_ddos_event(
           af, src, reason, pps > 0xFFFFFFFFULL ? 0xFFFFFFFFU : (u32)pps);
       }

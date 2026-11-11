@@ -84,9 +84,10 @@ MODULE_PARM_DESC(state_file, "用于保存/恢复封禁和白名单条目的状�
 module_param(fw_max_bans_per_second, uint, 0400);
 MODULE_PARM_DESC(fw_max_bans_per_second, "泛洪保护下每秒最大封禁添加次数（默认 200）");
 module_param(fw_max_rate_entries, uint, 0644);
-MODULE_PARM_DESC(fw_max_rate_entries, "速率表条目上限（默认 65536，范围 1024-262144）。"
-                                      "有效上限 = min(本参数, 512)：512 为 FW_RATE_CPU_SLOTS，"
-                                      "是同时在跟踪源地址数的硬上限，超出部分按契约放行");
+MODULE_PARM_DESC(fw_max_rate_entries,
+                 "速率表条目上限（默认 65536，范围 1024-262144）。"
+                 "有效上限 = min(本参数, 512)：512 为 FW_RATE_CPU_SLOTS，"
+                 "是同时在跟踪源地址数的硬上限，超出部分按契约放行");
 module_param(fw_max_ban_entries, uint, 0644);
 MODULE_PARM_DESC(fw_max_ban_entries, "封禁表最大条目数（默认 65535）。到限即拒绝新增并计入 "
                                      "ban_table_full_rejects");

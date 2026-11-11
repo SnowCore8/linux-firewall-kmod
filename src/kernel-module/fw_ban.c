@@ -84,15 +84,29 @@ _Static_assert(BAN_SHORT_LAYER_BITS < 32 && BAN_HASH_BITS < 32,
                "bucket_bits is used as 1U << bits, must stay below 32");
 
 /*
- * banned_at 的内部单位是 jiffies（单调，便于算已封禁时长）；对外一律是
- * Unix 秒（契约 netlink.fwidl:207 与 fw_types.h 的 struct fw_ban_row 都这么定）。
- * 两者之间的换算只在读侧序列化时做，避免热路径调用 ktime_get_real_seconds()。
+ * banned_at 是封禁起点的 Unix 秒；unban_jiffies 是绝对到期时刻，**同样以 Unix
+ * 秒计**（0 表示永久）。二者对外契约本来就是 Unix 秒，存 Unix 秒可省掉读侧换算。
+ * 不用 jiffies 存到期时刻的原因在 32 位内核上很硬：unsigned long 只有 32 位，
+ * 365 天（契约允许的上限）乘以 HZ 后回绕成过去值，mod_timer 会立即到期。Unix
+ * 秒在 32 位 unsigned long 上可表示到 2106 年，远超契约上限。定时器因此只武装
+ * 到可表示的一跳，未到绝对时刻就再武装剩余段（见 fw_ban_timer_deadline）。
  */
 static u64 fw_ban_start_unix(const struct fw_ban_node *n) {
-  u64 now = ktime_get_real_seconds();
-  unsigned long elapsed = jiffies - READ_ONCE(n->banned_at);
+  return (u64)READ_ONCE(n->banned_at);
+}
 
-  return now - (u64)(elapsed / HZ);
+/*
+ * 定时器的一次武装截止点：jiffies 最多安全推进 MAX_JIFFY_OFFSET，更长的间隔
+ * 必须分段。返回 jiffies + min(距到期秒数 * HZ, MAX_JIFFY_OFFSET)。
+ */
+static unsigned long fw_ban_timer_deadline(u64 expire_unix) {
+  u64 now = ktime_get_real_seconds();
+  u64 secs = expire_unix > now ? expire_unix - now : 0;
+  u64 jif = secs * (u64)HZ;
+
+  if (jif > (u64)MAX_JIFFY_OFFSET)
+    jif = (u64)MAX_JIFFY_OFFSET;
+  return jiffies + (unsigned long)jif;
 }
 
 /* 地址族对应的封禁表（v4/v6 各一张，层内结构相同，只是层数不同） */
@@ -157,8 +171,9 @@ static void fw_ban_layer_release(struct fw_ban_table *t, u8 prefix_len, u32 n) {
 }
 
 static inline bool fw_ban_node_expired(const struct fw_ban_node *n) {
-  return !READ_ONCE(n->is_permanent) &&
-         time_after_eq(jiffies, READ_ONCE(n->unban_jiffies));
+  if (READ_ONCE(n->is_permanent))
+    return false;
+  return ktime_get_real_seconds() >= (u64)READ_ONCE(n->unban_jiffies);
 }
 
 /* 单层探测：层内桶里是否存在覆盖 ip 的条目（调用者持 RCU 读侧临界区） */
@@ -246,17 +261,10 @@ static struct fw_ban_node *fw_ban_alloc(u8 af, const void *addr, u8 prefix_len,
   n->prefix_len = prefix_len;
   n->duration_secs = duration_secs;
   n->is_permanent = duration_secs == 0;
-  if (start_unix) {
-    /* 状态恢复：外部时点换算回 jiffies 偏移，保住原始封禁起点 */
-    u64 now = ktime_get_real_seconds();
-    unsigned long elapsed = start_unix >= now ? 0 : (unsigned long)((now - start_unix) * HZ);
-
-    n->banned_at = jiffies - elapsed;
-  } else {
-    n->banned_at = jiffies;
-  }
+  /* 起点：状态恢复传回原始起点，运行路径取当前时刻；到期时刻 = 起点 + 时长 */
+  n->banned_at = (unsigned long)(start_unix ? start_unix : (u64)ktime_get_real_seconds());
   if (duration_secs)
-    n->unban_jiffies = jiffies + (unsigned long)duration_secs * HZ;
+    n->unban_jiffies = (unsigned long)((u64)n->banned_at + duration_secs);
   if (af == FW_AF_INET6)
     memcpy(&n->addr, addr, sizeof(struct in6_addr));
   else
@@ -280,7 +288,7 @@ static void fw_ban_expire_cb(struct timer_list *t) {
   union fw_addr addr;
   u32 bkt;
   u8 af, prefix_len;
-  unsigned long unb;
+  u64 expire;
 
   rcu_read_lock();
 
@@ -311,10 +319,14 @@ static void fw_ban_expire_cb(struct timer_list *t) {
     rcu_read_unlock();
     return;
   }
-  /* 续期竞态：到期前被延长，则重武装本次定时器（同一次 READ_ONCE 取值判、用） */
-  unb = READ_ONCE(n->unban_jiffies);
-  if (!READ_ONCE(n->is_permanent) && time_before(jiffies, unb)) {
-    mod_timer(&n->expire_timer, unb);
+  /*
+   * 定时器只武装到可表示的一跳（32 位内核上 365 天远超 jiffies 范围），故这里
+   * 按绝对到期时刻判断：续期竞态（到期前被延长）与分段未走完都表现为「未到绝对
+   * 时刻」，此时重新武装剩余段即可，不能按 jiffies 比较（那会被截断骗过）。
+   */
+  expire = (u64)READ_ONCE(n->unban_jiffies);
+  if (!READ_ONCE(n->is_permanent) && ktime_get_real_seconds() < expire) {
+    mod_timer(&n->expire_timer, fw_ban_timer_deadline(expire));
     spin_unlock_bh(&layer->locks[bkt]);
     rcu_read_unlock();
     return;
@@ -447,12 +459,15 @@ unsigned int fw_ban_recent_additions_stat(void) {
  * 分配在取锁之前完成（GFP_ATOMIC 不持锁），若最终未用则 kfree。
  * 查重与删除定位都按 (af, addr, prefix_len) 三元组：前缀决定层，层决定桶数组。
  */
-static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len,
-                         u32 duration_secs, const char *reason, const char *jail,
-                         bool notify, bool *is_new, u64 start_unix) {
+static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len, u32 duration_secs,
+                         const char *reason, const char *jail, bool notify,
+                         bool *is_new, u64 start_unix, bool flood_gate) {
   struct fw_ban_table *t = fw_ban_table(af);
   struct fw_ban_layer *layer = &t->layers[prefix_len];
   struct fw_ban_node *n, *existing;
+  union fw_addr addr_copy;
+  char reason_copy[32];
+  char jail_copy[32];
   u32 bkt = fw_ban_bucket(layer, af, addr, prefix_len);
 
   n = fw_ban_alloc(af, addr, prefix_len, duration_secs, reason, jail, start_unix);
@@ -471,20 +486,17 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len,
 
   if (existing) {
     /*
-     * 过期未摘链：按本次请求续期，重武装定时器。
+     * 过期未摘链：按本次请求续期，重武装定时器（只武装到下一个可表示的一跳，
+     * 未到绝对到期时刻时由回调继续分段）。
      * 该节点已在链表上发布，读侧（分页遍历、到期回调）可能同时在读，
      * 故这几个标量一律 WRITE_ONCE，读侧对应 READ_ONCE。
      */
-    unsigned long unb = 0;
-
-    if (duration_secs)
-      unb = jiffies + (unsigned long)duration_secs * HZ;
     WRITE_ONCE(existing->duration_secs, duration_secs);
     WRITE_ONCE(existing->is_permanent, duration_secs == 0);
     WRITE_ONCE(existing->banned_at, n->banned_at);
-    WRITE_ONCE(existing->unban_jiffies, unb);
+    WRITE_ONCE(existing->unban_jiffies, n->unban_jiffies);
     if (duration_secs)
-      mod_timer(&existing->expire_timer, unb);
+      mod_timer(&existing->expire_timer, fw_ban_timer_deadline((u64)n->unban_jiffies));
     else
       timer_delete(&existing->expire_timer);
     spin_unlock_bh(&layer->locks[bkt]);
@@ -505,11 +517,33 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len,
   }
 
   /*
+   * 泛洪闸门只对「确实要插入新条目」扣预算：有效条目在上面已直接返回，续期
+   * 走另一个分支，都不会到这里。闸门放在容量检查之后，被 -ENOSPC 拒绝的请求
+   * 也不占预算——只扣真正落地为插入的那一次，重复下发同一地址不会把 200/s
+   * 的名额耗尽后让新封禁报 -EBUSY。
+   */
+  if (flood_gate && !fw_ban_flood_allow()) {
+    atomic_dec(&fw_info.ban_count);
+    spin_unlock_bh(&layer->locks[bkt]);
+    kfree(n);
+    return -EBUSY;
+  }
+
+  /*
    * 定时器在发布前武装：避免 PREEMPT_RT 下节点发布后、mod_timer 前被其他 CPU
    * 删除并释放，导致操作已释放的 timer_list（use-after-free）。
    */
   if (duration_secs)
-    mod_timer(&n->expire_timer, n->unban_jiffies);
+    mod_timer(&n->expire_timer, fw_ban_timer_deadline((u64)n->unban_jiffies));
+
+  /*
+   * 事件字段必须在解锁前拷到栈上：节点一旦挂链就发布给读者，并发的
+   * fw_ban_del / fw_ban_del_matching 会摘链并 call_rcu 释放，解锁后再读
+   * n->addr / n->reason / n->jail_name 就是访问已释放内存。
+   */
+  addr_copy = n->addr;
+  strscpy(reason_copy, n->reason, sizeof(reason_copy));
+  strscpy(jail_copy, n->jail_name, sizeof(jail_copy));
 
   hlist_add_head_rcu(&n->hash, &layer->buckets[bkt]);
   spin_unlock_bh(&layer->locks[bkt]);
@@ -522,17 +556,10 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len,
   fw_stat_inc_bans();
 
   /*
-   * 通知发送：拷贝字段到栈上，避免节点被并发删除后访问已释放内存。
+   * 通知发送：字段已在上面的临界区内拷贝，解锁后发送不会碰到已释放节点。
    * 同时持有 netlink 发送锁，防止 socket 被并发释放。
    */
   if (notify) {
-    union fw_addr addr_copy = n->addr;
-    char reason_copy[32];
-    char jail_copy[32];
-
-    strscpy(reason_copy, n->reason, sizeof(reason_copy));
-    strscpy(jail_copy, n->jail_name, sizeof(jail_copy));
-
     fw_nl_send_lock();
     if (fw_nl_sock_available())
       fw_nl_send_ban_state_change(FW_BAN_ACTION_BAN, af, prefix_len, &addr_copy,
@@ -561,11 +588,10 @@ int fw_ban_try_add(u8 af, const void *addr, u8 prefix_len, u32 duration_secs,
     return -EPERM;
   }
 
-  /* 泛洪闸门：三条封禁路径共用同一道闸 */
-  if (!fw_ban_flood_allow())
-    return -EBUSY;
-
-  ret = fw_ban_insert(af, addr, prefix_len, duration_secs, reason, jail, notify, &is_new, 0);
+  /* 泛洪闸门：三条封禁路径共用同一道闸。闸门在 fw_ban_insert 内、确认要插入
+   * 新条目之后才扣预算，重复下发已封禁地址不再消耗名额。 */
+  ret = fw_ban_insert(
+    af, addr, prefix_len, duration_secs, reason, jail, notify, &is_new, 0, true);
   return ret;
 }
 
@@ -670,8 +696,8 @@ int fw_ban_restore(u8 af, const void *addr, u8 prefix_len, u32 duration_secs,
   if (!fw_ban_prefix_valid(af, prefix_len))
     return -EINVAL;
 
-  return fw_ban_insert(
-    af, addr, prefix_len, duration_secs, reason, jail, true, &is_new, banned_at);
+  return fw_ban_insert(af, addr, prefix_len, duration_secs, reason, jail, true,
+                       &is_new, banned_at, false);
 }
 
 /* ============================================================================

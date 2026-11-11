@@ -54,11 +54,13 @@
 #define FW_STATE_CRC_LINE_LEN 15
 
 /*
- * 保存时每张表的写出上限：取运行时容量参数，快照才可能覆盖表的全部内容
- * （旧值是编译期的 4096，而封禁表/白名单默认容量都是 65535）。
+ * 保存时每张表的写出上限：取 fw_info 里的容量快照（fw_main.c 载入参数时写入），
+ * 快照才可能覆盖表的全部内容。不能读 fw_max_ban_entries / fw_max_whitelist_entries
+ * 这两个 0644 模块参数：运行期改写它们并不改变已分配表的实际容量，却会让保存
+ * 路径与文件预算按新值静默丢弃条目。
  */
-#define FW_STATE_MAX_BAN fw_max_ban_entries
-#define FW_STATE_MAX_WL fw_max_whitelist_entries
+#define FW_STATE_MAX_BAN fw_info.max_ban_entries
+#define FW_STATE_MAX_WL fw_info.max_wl_entries
 
 /* 分页收集时每页行数 */
 #define FW_STATE_PAGE 64
@@ -71,7 +73,7 @@ static unsigned long fw_state_restored_flag;
  * 而读取发生在 procfs show（不同 CPU）。 */
 static atomic64_t fw_state_save_truncated_count;
 
-/* 按容量参数推出状态文件的可读上限（超出即视为损坏，不尝试恢复） */
+/* 按容量快照推出状态文件的可读上限（超出即视为损坏，不尝试恢复） */
 static size_t fw_state_max_file_size(void) {
   u64 lines = (u64)FW_STATE_MAX_BAN + FW_STATE_MAX_WL + 4;
   u64 bytes = lines * FW_STATE_MAX_LINE;
@@ -122,7 +124,11 @@ static int fw_state_validate_path(const char *path) {
   return 0;
 }
 
-/* jail 字段内的空白会破坏空格分隔的行格式，统一替换为 '_' */
+/*
+ * 字段内的空白（空格 / 制表 / 换行 / 回车）会破坏空格分隔、换行分行的文件格式，
+ * 统一替换为 '_'。reason 与 device_name 都由外部输入（HTTP 请求 / 设备名）而来，
+ * 不清洗就能把 "x\nWL_V4 6.6.6.6 32 api" 这样的内容写成合法的白名单行。
+ */
 static void fw_state_sanitize_field(char *s, size_t n) {
   size_t i;
 
@@ -194,9 +200,8 @@ static bool fw_state_line_fits(const struct fw_state_write_ctx *ctx, int n) {
   return ctx->used + (size_t)n + FW_STATE_CRC_LINE_LEN <= ctx->limit;
 }
 
-static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
-                               char *buf, size_t buf_size,
-                               struct fw_state_write_ctx *ctx) {
+static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc, char *buf,
+                               size_t buf_size, struct fw_state_write_ctx *ctx) {
   struct fw_ban_row *rows;
   u64 now = ktime_get_real_seconds();
   u32 offset = 0;
@@ -214,6 +219,7 @@ static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
       struct fw_ban_row *r = &rows[i];
       char ip_str[FW_INET6_STR_LEN];
       char jail[sizeof(r->jail_name)];
+      char reason[sizeof(r->reason)];
       u64 remaining;
       int n;
 
@@ -237,14 +243,18 @@ static int fw_state_write_bans(struct file *file, loff_t *pos, u32 *crc,
        * 其中一台主机（见 fw_state.h 的格式表）。
        */
       fw_addr_to_str(r->af, &r->addr, ip_str, sizeof(ip_str));
+      /* jail 与 reason 都在本地拷贝上清洗，绝不改表节点本身 */
       memcpy(jail, r->jail_name, sizeof(jail));
       jail[sizeof(jail) - 1] = '\0';
       fw_state_sanitize_field(jail, sizeof(jail));
+      memcpy(reason, r->reason, sizeof(reason));
+      reason[sizeof(reason) - 1] = '\0';
+      fw_state_sanitize_field(reason, sizeof(reason));
 
       n = snprintf(buf, buf_size, "%s %s/%u %llu %s %s\n",
                    r->af == FW_AF_INET6 ? "BAN_V6" : "BAN_V4", ip_str,
                    (unsigned int)r->prefix_len, (unsigned long long)remaining,
-                   jail[0] ? jail : "api", r->reason[0] ? r->reason : "(none)");
+                   jail[0] ? jail : "api", reason[0] ? reason : "(none)");
       if (n >= (int)buf_size) {
         ret = -ENOSPC;
         goto out;
@@ -269,9 +279,8 @@ out:
   return ret;
 }
 
-static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc,
-                                    char *buf, size_t buf_size,
-                                    struct fw_state_write_ctx *ctx) {
+static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc, char *buf,
+                                    size_t buf_size, struct fw_state_write_ctx *ctx) {
   struct fw_wl_row *rows;
   u32 offset = 0;
   int ret = 0;
@@ -287,6 +296,7 @@ static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc,
     for (i = 0; i < got; i++) {
       struct fw_wl_row *r = &rows[i];
       char ip_str[FW_INET6_STR_LEN];
+      char dev[sizeof(r->device_name)];
       int n;
 
       if (offset + i >= FW_STATE_MAX_WL) {
@@ -295,9 +305,12 @@ static int fw_state_write_whitelist(struct file *file, loff_t *pos, u32 *crc,
       }
 
       fw_addr_to_str(r->af, &r->addr, ip_str, sizeof(ip_str));
-      n = snprintf(buf, buf_size, "%s %s %u %s\n",
-                   r->af == FW_AF_INET6 ? "WL_V6" : "WL_V4", ip_str,
-                   r->prefix_len, r->device_name[0] ? r->device_name : "api");
+      /* device_name 可能来自接口名或外部下发，同样在本地拷贝上清洗 */
+      memcpy(dev, r->device_name, sizeof(dev));
+      dev[sizeof(dev) - 1] = '\0';
+      fw_state_sanitize_field(dev, sizeof(dev));
+      n = snprintf(buf, buf_size, "%s %s %u %s\n", r->af == FW_AF_INET6 ? "WL_V6" : "WL_V4",
+                   ip_str, r->prefix_len, dev[0] ? dev : "api");
       if (n >= (int)buf_size) {
         ret = -ENOSPC;
         goto out;
@@ -375,8 +388,8 @@ int fw_state_save(void) {
   /* 截断只告警一次，带本轮丢弃条数与实际上限，便于定位容量参数配得过大 */
   if (ctx.dropped) {
     atomic64_inc(&fw_state_save_truncated_count);
-    pr_warn("状态文件达到上限 %zu 字节，本次丢弃 %llu 个条目\n",
-            ctx.limit, (unsigned long long)ctx.dropped);
+    pr_warn("状态文件达到上限 %zu 字节，本次丢弃 %llu 个条目\n", ctx.limit,
+            (unsigned long long)ctx.dropped);
   }
 
   /* CRC 行不参与校验和计算，故用 kernel_write 直接落盘 */

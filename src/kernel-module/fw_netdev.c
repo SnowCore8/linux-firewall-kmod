@@ -38,7 +38,7 @@
 #define FW_NETDEV_LOCAL_MIN 16
 #define FW_NETDEV_LOCAL_MAX (1u << 16)
 
-/* 白名单对账的分页大小与最大遍数（每遍至少删掉一条，故有限终止） */
+/* 自动白名单对账的分页大小与单轮最大遍数（每遍至少删掉一条；到上限则重排一轮） */
 #define FW_NETDEV_WL_PAGE 128
 #define FW_NETDEV_MAX_PASSES 64
 
@@ -216,7 +216,9 @@ static bool fw_netdev_local_has(const struct fw_wl_row *locals, u32 n,
  *
  * 分页读取整张白名单表；一旦删掉某条就从头重扫——因为 hlist 删除会改变后续
  * 遍历位置，重扫比在原页上做 offset 补偿更不容易出错。每遍至少删除一条，
- * 故以 FW_NETDEV_MAX_PASSES 为上界必然终止。
+ * 但条目数可能远超单轮的 FW_NETDEV_MAX_PASSES 上限（接近白名单容量时），
+ * 故到达上限且仍有删除时重新排一轮 delayed work，而不是直接收工——否则残留
+ * 条目要等下一次 netdev 事件才可能被清掉，没有事件就永久占着白名单与容量。
  *
  * 用 fw_wl_remove_quiet()：不触发「白名单变更 → 解封」联动（接口消失不是用户
  * 撤销信任的行为，不应连带解封）。
@@ -266,6 +268,18 @@ static void fw_netdev_reconcile_whitelist(const struct fw_wl_row *locals, u32 n)
       offset += got;
     }
   } while (removed && ++passes < FW_NETDEV_MAX_PASSES);
+
+  /*
+   * 到单轮上限时 removed 仍为真：还剩条目未清，重排一次对账（走既有防抖
+   * delayed work，不忙等）。这里用 queue_delayed_work 而不是 mod_delayed_work：
+   * 调用点就在工作项自身内部，运行中 PENDING 已清零，queue 对工作项自己续排
+   * 是既有语义；若期间 netdev 事件已排好下一轮，queue 返回 false，正好不叠加。
+   * shutting_down 与 work 是否初始化过都要先查，卸载路径的
+   * cancel_delayed_work_sync() 会取消这次重排，故不会无限循环。
+   */
+  if (removed && fw_netdev_work_ready && !fw_is_shutting_down())
+    queue_delayed_work(
+      system_wq, &fw_info.sync_work, msecs_to_jiffies(FW_NETDEV_SYNC_DELAY_MS));
 
   kfree(page);
 }

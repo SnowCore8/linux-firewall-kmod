@@ -237,8 +237,8 @@ struct fw_ban_node {
   u8 prefix_len; /* 32/128 = 精确单机；更短 = 网段封禁（条目身份的一部分） */
   u8 is_permanent;
   u32 duration_secs;           /* 本次封禁时长（秒），永久为 0；续期时更新 */
-  unsigned long banned_at;     /* jiffies */
-  unsigned long unban_jiffies; /* 到期 jiffies；永久条目无意义 */
+  unsigned long banned_at;     /* Unix 秒 */
+  unsigned long unban_jiffies; /* 绝对 Unix 到期秒；永久条目为 0 */
   union fw_addr addr;
   char jail_name[32];
   char reason[32];
