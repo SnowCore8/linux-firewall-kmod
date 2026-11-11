@@ -100,6 +100,9 @@ export default function Logs() {
   // 未暂停但缓冲已满时被挤出的较早行数；恢复接收/清空缓冲时清零，与 missedRef 同语义
   const [dropped, setDropped] = useState(0)
   const droppedRef = useRef(0)
+  // 已计入 droppedRef 的最新行 id：更新器在 StrictMode 下会被重复调用，
+  // 用单调递增的 id 保证同一条的丢弃只累计一次
+  const countedDropIdRef = useRef(0)
   const [autoscroll, setAutoscroll] = useState(true)
   const [liveLevel, setLiveLevel] = useState<LevelFilter>('all')
   const [liveKeyword, setLiveKeyword] = useState('')
@@ -117,9 +120,6 @@ export default function Logs() {
   modeRef.current = mode
   const viewerRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(true)
-  // 渲染期同步缓冲行数：事件回调据此判断下一行是否会挤掉最旧一行（同 pausedRef / modeRef 的写法）
-  const liveCountRef = useRef(0)
-  liveCountRef.current = liveLines.length
 
   // 暂停期间每秒把 missedRef 批量同步到 missed state 一次；恢复接收（paused→false）即停表。
   // 于是「暂停时高频丢行」只引起每秒一次重渲染，而不是每条丢弃各渲染一次。
@@ -138,6 +138,11 @@ export default function Logs() {
       mountedRef.current = false
     }
   }, [])
+
+  // droppedRef 在状态更新器里累加（一批帧内逐条计数），提交后同步到提示文案
+  useEffect(() => {
+    if (dropped !== droppedRef.current) setDropped(droppedRef.current)
+  }, [liveLines, dropped])
 
   // --- 历史查询状态 ---
   const [histLevel, setHistLevel] = useState<LevelFilter>('all')
@@ -217,12 +222,16 @@ export default function Logs() {
     // 收一行进缓冲。缓冲已满时会把最旧一行挤出去——这类丢弃与暂停期丢行一样要计数，
     // 否则面板顶部静默变短，用户无从知道有日志没看到
     const appendLine = (content: string, level: LogLevel | null) => {
-      if (liveCountRef.current >= MAX_LIVE_LINES) {
-        droppedRef.current += 1
-        setDropped(droppedRef.current)
-      }
       const line: LiveLine = { id: ++lineIdRef.current, content, level, at: Date.now() }
+      // 一批帧在同一渲染批次里连续追加时，渲染期的 liveLines 快照不会更新，
+      // 实际挤出多少行只能按更新器收到的 prev 长度算；line.id 兼作已计数标记，
+      // StrictMode 重复调用更新器时不会重复累加。
       setLiveLines((prev) => {
+        const overflow = prev.length + 1 - MAX_LIVE_LINES
+        if (overflow > 0 && line.id > countedDropIdRef.current) {
+          countedDropIdRef.current = line.id
+          droppedRef.current += overflow
+        }
         const next = [...prev, line]
         return next.length > MAX_LIVE_LINES ? next.slice(next.length - MAX_LIVE_LINES) : next
       })

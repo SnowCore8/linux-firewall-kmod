@@ -314,9 +314,9 @@ export default function Bans() {
           reason: values.reason?.trim() || null,
         })
         message.success(
-          res.permanent
+          res.permanent || !res.duration_seconds
             ? `已封禁 ${res.ip}（永久）`
-            : `已封禁 ${res.ip}（时长 ${formatDuration(res.duration_seconds ?? 0)}）`,
+            : `已封禁 ${res.ip}（时长 ${formatDuration(res.duration_seconds)}）`,
         )
         setCreateOpen(false)
         createForm.resetFields()
@@ -607,13 +607,13 @@ export default function Bans() {
         <Form.Item
           name="duration"
           label="时长（秒）"
-          extra="留空 = 永久封禁；否则须为 0–86400 的整数秒（上限 24 小时）。"
+          extra="留空或填 0 = 永久封禁；否则须为 1–86400 的整数秒（上限 24 小时）。"
           rules={[
             {
               validator: (_, value: string) =>
                 value === undefined || isValidDuration(value)
                   ? Promise.resolve()
-                  : Promise.reject(new Error('须为 0–86400 的整数，或留空表示永久')),
+                  : Promise.reject(new Error('须为 0–86400 的整数（0 = 永久），或留空表示永久')),
             },
           ]}
         >

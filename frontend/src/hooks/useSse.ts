@@ -300,6 +300,9 @@ export function useEventStream(enabled: boolean): EventStreamResult {
   }, [closeStream, setState, clearTimer])
 
   useEffect(() => {
+    // StrictMode 下 effect 会 mount→unmount→mount：卸载 effect 会把标志置 false，
+    // 重挂载必须复位，否则 getSseStatus 的异步回调会被永久丢弃、自动重连失效。
+    mountedRef.current = true
     if (enabled) {
       attemptsRef.current = 0
       connect()
