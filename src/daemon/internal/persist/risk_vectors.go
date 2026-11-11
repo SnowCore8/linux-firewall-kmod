@@ -83,14 +83,24 @@ func (db *DB) UpsertRiskVector(ip string, vec risk.RiskVector, lastEventAt int64
 	return nil
 }
 
+// defaultRiskVectorDecayInterval 是风险向量衰减的节拍。半衰期以天计，1 小时足够让
+// 「没有新事件的 IP」也按 7 天半衰期收敛，又不至于每秒扫一遍向量表。
+const defaultRiskVectorDecayInterval = time.Hour
+
 // BatchDecayVectors 对所有向量施加衰减（定期调用，如每小时一次）。
 //
-// 衰减公式：vec *= DecayFactor(days_since_last_event)
+// 衰减公式：vec *= DecayFactor(自上次快照写入以来的天数)。
+//
+// 基准取 updated_at 而不是 last_event_at：向量值代表「上次写库时的风险」，每拍衰减的
+// 只能是这段间隔；若每拍都按「距事件的天数」重算，一小时的节拍会把同一个衰减因子反复
+// 乘上去，向量在半天内就被压到零，7 天半衰期名存实亡。写回时 last_event_at 保持原值，
+// updated_at 由 UpsertRiskVector 刷成当前时刻，下一拍从这里继续。
+//
 // 衰减后向量接近 0 时直接删除，避免数据库无限增长。
 func (db *DB) BatchDecayVectors(now int64) error {
 	// 先读完所有行再关闭迭代器，避免在单连接模式下嵌套写操作导致死锁
 	rows, err := db.conn.Query(
-		`SELECT ip, failure, ban, scan, bruteforce, ddos, geo, cluster, last_event_at
+		`SELECT ip, failure, ban, scan, bruteforce, ddos, geo, cluster, last_event_at, updated_at
 		 FROM ip_risk_vectors`,
 	)
 	if err != nil {
@@ -101,6 +111,7 @@ func (db *DB) BatchDecayVectors(now int64) error {
 		ip          string
 		vec         risk.RiskVector
 		lastEventAt int64
+		updatedAt   int64
 	}
 	var entries []decayEntry
 	var toDelete []string
@@ -117,12 +128,13 @@ func (db *DB) BatchDecayVectors(now int64) error {
 			&entry.vec.Geo,
 			&entry.vec.Cluster,
 			&entry.lastEventAt,
+			&entry.updatedAt,
 		); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan risk_vector: %w", err)
 		}
 
-		days := risk.DaysSince(now, entry.lastEventAt)
+		days := risk.DaysSince(now, entry.updatedAt)
 		entry.vec.Decay(days)
 
 		if entry.vec.IsZero() || (entry.vec.Total(risk.DefaultDimensionWeights()) < 0.01) {
@@ -151,6 +163,37 @@ func (db *DB) BatchDecayVectors(now int64) error {
 	}
 
 	return nil
+}
+
+// StartRiskVectorDecayScheduler 启动周期性风险向量衰减任务。
+//
+// 为什么需要：内存引擎只在事件到达时衰减，而库里的旧向量没有别的写者；没有这条节拍，
+// 契约声明的 7 天半衰期对「不再被命中的 IP」完全不生效，向量会一直停在最后一次事件的
+// 读数上。失败只记日志不退出：衰减是后台维护，不该拖垮进程。
+//
+// 返回的通道在 goroutine 退出后关闭；调用方应先等它关闭再关数据库，
+// 防止衰减操作写到已关闭的连接。
+func (db *DB) StartRiskVectorDecayScheduler(interval time.Duration, stopCh <-chan struct{}) <-chan struct{} {
+	if interval <= 0 {
+		interval = defaultRiskVectorDecayInterval
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				if err := db.BatchDecayVectors(time.Now().Unix()); err != nil {
+					db.logger.Error("risk vector decay failed", "error", err)
+				}
+			}
+		}
+	}()
+	return done
 }
 
 // DeleteRiskVector 删除指定 IP 的向量记录。

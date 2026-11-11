@@ -201,6 +201,8 @@ func run(args []string) error {
 	var historyDB *persist.DB
 	// facts 是判定层的信誉分/封禁次数缓存（nil 时执行体退回 NoHistory）。
 	var facts *persist.Facts
+	// vectorDecayDone 在风险引擎启用时非 nil：向量表只有该开关打开才有写入。
+	var vectorDecayDone <-chan struct{}
 	if cfg.HistoryDBPath != "" {
 		db, err := persist.NewDB(persist.Config{
 			Path:   cfg.HistoryDBPath,
@@ -222,6 +224,11 @@ func run(args []string) error {
 				RiskHalfLifeDays:  cfg.RiskEngine.HalfLifeDays,
 			})
 			factsDone := facts.StartFlusher(dbStopCh)
+			// 风险向量衰减也是周期任务：7 天半衰期只在库里有调用者时才生效。未启用风险
+			// 引擎时向量表没有写入，不跑这条无谓的库操作（feature flag 语义）。
+			if cfg.RiskEngine.Enabled {
+				vectorDecayDone = db.StartRiskVectorDecayScheduler(0, dbStopCh)
+			}
 			// 关停顺序：先停各调度器，再等所有后台任务结束，最后才关库。
 			// 这段 defer 在 db.Close 之后登记，LIFO 执行时排在它前面。
 			defer func() {
@@ -229,6 +236,9 @@ func run(args []string) error {
 				<-cleanupDone
 				<-recoveryDone
 				<-factsDone
+				if vectorDecayDone != nil {
+					<-vectorDecayDone
+				}
 				// 风险事件 worker 也写同一个库：必须先排空它再走到 db.Close。
 				facts.Stop()
 			}()

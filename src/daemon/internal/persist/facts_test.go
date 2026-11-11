@@ -242,6 +242,75 @@ func TestNilDBIsMemoryOnly(t *testing.T) {
 	}
 }
 
+// waitUntil 轮询等待条件成立；测试里唯一的等待手段，避免依赖固定睡眠时长。
+func waitUntil(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("等待条件成立超时")
+}
+
+// 库侧的恢复/封禁写库改分必须能被判定层看到：只在首次访问时加载一次，阈值就会永远
+// 按进程启动时的旧分算。重载后的有效分 = clamp(库中分) - 尚未落盘的 pending，
+// 重载不能把未刷盘的失败扣分抹掉。
+func TestScoreReloadPicksUpDBAndKeepsPending(t *testing.T) {
+	db := newTestDB(t)
+	f := NewFacts(db, FactsOptions{ScoreReloadEvery: 20 * time.Millisecond})
+	ip := "203.0.113.90"
+
+	f.RecordFailure(addr(t, ip)) // pending=10，默认刷盘周期 5 秒，测试期间不会落盘
+	if got := f.ReputationScore(addr(t, ip)); got != 90 {
+		t.Fatalf("一次失败后内存分数 = %d，期望 90", got)
+	}
+	// 模拟恢复调度器/封禁写库把库里的分数改到 50（库侧不经过本缓存）。
+	if err := db.SetIPReputation(ip, 50); err != nil {
+		t.Fatalf("预置库中分数失败: %v", err)
+	}
+
+	stop := make(chan struct{})
+	done := f.StartFlusher(stop)
+	defer func() {
+		close(stop)
+		<-done
+	}()
+
+	waitUntil(t, 2*time.Second, func() bool {
+		return f.ReputationScore(addr(t, ip)) == 40
+	})
+	if got := f.ReputationScore(addr(t, ip)); got != 40 {
+		t.Fatalf("重载后分数 = %d，期望 40（库中 50 减未落盘的 10）", got)
+	}
+}
+
+// total_failures 是失败条数而不是落盘批次数：一次折叠写入三条失败必须累加 3。
+func TestFailureCountAddsPerRow(t *testing.T) {
+	db := newTestDB(t)
+	f := NewFacts(db, FactsOptions{})
+	ip := "203.0.113.91"
+
+	for i := 0; i < 3; i++ {
+		f.RecordFailure(addr(t, ip))
+	}
+	if err := f.Flush(); err != nil {
+		t.Fatalf("刷盘失败: %v", err)
+	}
+	rep, err := db.GetIPReputation(ip)
+	if err != nil || rep == nil {
+		t.Fatalf("读信誉失败: %v（rep=%v）", err, rep)
+	}
+	if rep.TotalFailures != 3 {
+		t.Fatalf("total_failures = %d，期望 3（按失败条数而不是批次）", rep.TotalFailures)
+	}
+	if rep.Score != 70 {
+		t.Fatalf("分数 = %d，期望 70", rep.Score)
+	}
+}
+
 // 扣分值可配置：与旧实现一致的 10 分是默认，装配方可以改。
 func TestPenaltyIsConfigurable(t *testing.T) {
 	db := newTestDB(t)

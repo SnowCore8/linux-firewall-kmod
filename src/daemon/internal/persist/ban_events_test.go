@@ -112,7 +112,7 @@ func TestMigrateBackfillsColumns(t *testing.T) {
 	}
 
 	// 信誉计数字段可用，且从 0 起累加（旧行没有这两列，补列后是默认 0）。
-	if err := db.RecordFailure("203.0.113.50", 10); err != nil {
+	if err := db.RecordFailure("203.0.113.50", 10, 1); err != nil {
 		t.Fatalf("记失败失败: %v", err)
 	}
 	if err := db.RecordBan("203.0.113.50", 10); err != nil {

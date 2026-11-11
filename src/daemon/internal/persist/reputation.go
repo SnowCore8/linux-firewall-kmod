@@ -79,17 +79,25 @@ func (db *DB) SetIPReputation(ip string, score int) error {
 	return nil
 }
 
-func (db *DB) RecordFailure(ip string, penalty int) error {
+// RecordFailure 记 count 次失败：扣分按 penalty 走（调用方传入聚合扣分），
+// total_failures 按实际失败条数累加。count <= 0 时按 1 次处理，保持单次调用的语义。
+//
+// 为什么 count 单独传：判定层按 IP 折叠成一条 UPDATE，penalty 是这一批的扣分总量，
+// 由它推不出条数（扣分值可配置），若仍写死 +1，「失败次数」就变成了「失败批次数」。
+func (db *DB) RecordFailure(ip string, penalty int, count int) error {
+	if count <= 0 {
+		count = 1
+	}
 	now := time.Now().Unix()
 	_, err := db.conn.Exec(
 		`INSERT INTO ip_reputation (ip, score, last_updated, last_failure, total_failures)
-		 VALUES (?, MAX(0, 100 - ?), ?, ?, 1)
+		 VALUES (?, MAX(0, 100 - ?), ?, ?, ?)
 		 ON CONFLICT(ip) DO UPDATE SET 
 			score = MAX(0, score - ?),
 			last_updated = excluded.last_updated,
 			last_failure = excluded.last_failure,
-			total_failures = total_failures + 1`,
-		ip, penalty, now, now, penalty,
+			total_failures = total_failures + ?`,
+		ip, penalty, now, now, count, penalty, count,
 	)
 	if err != nil {
 		return fmt.Errorf("record failure: %w", err)

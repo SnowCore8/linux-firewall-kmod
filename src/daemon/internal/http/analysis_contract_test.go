@@ -560,7 +560,7 @@ func TestRecidivismAndReputationReadPercentScale(t *testing.T) {
 	if err := db.SetIPReputation("203.0.140.9", 60); err != nil {
 		t.Fatalf("写信誉分失败: %v", err)
 	}
-	if err := db.RecordFailure("203.0.140.9", 10); err != nil {
+	if err := db.RecordFailure("203.0.140.9", 10, 1); err != nil {
 		t.Fatalf("记失败失败: %v", err)
 	}
 	if err := db.RecordBan("203.0.140.9", 10); err != nil {
