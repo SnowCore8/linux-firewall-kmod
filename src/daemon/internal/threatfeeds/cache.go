@@ -58,12 +58,29 @@ func NewFeedCache() *FeedCache {
 	return c
 }
 
+// canonicalPrefix 把 IPv4-mapped IPv6 前缀归一成 IPv4 前缀，其余原样返回。
+//
+// 情报源偶尔用 `::ffff:a.b.c.d` 写 IPv4。Lookup 会把查询地址 Unmap 成 IPv4，
+// 若不在这里归一，这类条目的键是 v6 形态、前缀桶长度是 120 以上，永远不会命中。
+func canonicalPrefix(p netip.Prefix) netip.Prefix {
+	p = p.Masked()
+	addr := p.Addr()
+	if !addr.Is4In6() {
+		return p
+	}
+	bits := p.Bits() - 96
+	if bits < 0 {
+		bits = 0
+	}
+	return netip.PrefixFrom(addr.Unmap(), bits)
+}
+
 // entryKey 返回条目在缓存里的规范键：全长条目用裸地址，网段用掩码后的 prefix。
 //
 // 全长条目必须落到裸地址键上，否则 Lookup 的 `ip.String()` 永远对不上
 // `prefix.String()`（带 `/32`），精确快路径会退化成全表遍历。
 func entryKey(p netip.Prefix) (key string, isCIDR bool, bits uint8) {
-	p = p.Masked()
+	p = canonicalPrefix(p)
 	addr := p.Addr()
 	if (addr.Is4() && p.Bits() == 32) || (addr.Is6() && p.Bits() == 128) {
 		return addr.String(), false, 0

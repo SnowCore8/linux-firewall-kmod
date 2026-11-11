@@ -144,6 +144,45 @@ func TestFeedCache_Lookup_ExactUsesExactIndex(t *testing.T) {
 	}
 }
 
+// TestFeedCache_MappedIPv4EntriesMatch 核对 IPv4-mapped IPv6 条目：情报源用
+// `::ffff:a.b.c.d` 写 IPv4 时，键与网段长度都必须归一成 v4 形态，否则 Lookup 永远
+// 命中不了（查询地址会先 Unmap 成 v4）。
+func TestFeedCache_MappedIPv4EntriesMatch(t *testing.T) {
+	cache := NewFeedCache()
+	now := time.Now()
+	entries := []FeedEntry{
+		{
+			IP:         netip.MustParsePrefix("::ffff:198.51.100.7/128"),
+			Source:     "exact",
+			Category:   "abuse",
+			Confidence: 0.8,
+			ExpiresAt:  now.Add(24 * time.Hour),
+		},
+		{
+			IP:         netip.MustParsePrefix("::ffff:203.0.113.0/120"),
+			Source:     "cidr",
+			Category:   "abuse",
+			Confidence: 0.8,
+			ExpiresAt:  now.Add(24 * time.Hour),
+		},
+	}
+	cache.Merge(entries)
+
+	if entry, ok := cache.Lookup(netip.MustParseAddr("198.51.100.7")); !ok {
+		t.Error("mapped 精确条目未命中")
+	} else if entry.Source != "exact" {
+		t.Errorf("精确命中 Source = %s，想要 exact", entry.Source)
+	}
+	if entry, ok := cache.Lookup(netip.MustParseAddr("203.0.113.42")); !ok {
+		t.Error("mapped 网段条目未命中")
+	} else if entry.Source != "cidr" {
+		t.Errorf("网段命中 Source = %s，想要 cidr", entry.Source)
+	}
+	if _, ok := cache.Lookup(netip.MustParseAddr("203.0.114.42")); ok {
+		t.Error("网段外地址不应命中")
+	}
+}
+
 func TestFeedCache_Expired(t *testing.T) {
 	cache := NewFeedCache()
 
