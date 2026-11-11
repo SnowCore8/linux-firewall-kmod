@@ -2,7 +2,9 @@ package http
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -324,9 +326,12 @@ func tailLogs(ctx context.Context, f *os.File, level string, conn *sseConn, done
 	ticker := time.NewTicker(logTailPollInterval)
 	defer ticker.Stop()
 
-	// 单行上限与 forEachLogLine 一致：一条超长的 JSON 记录不该整条丢掉。
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLogLineBytes)
+	// 不能用 bufio.Scanner 跨轮复用：它第一次读到 EOF 就把自己标记为 done，之后的
+	// Scan 不再读文件。这条流面对的恰恰是「attach 时在末尾、之后不断追加」的文件，
+	// 正常情况第一轮读到的就是 EOF——用 Scanner 等于只推第一秒写入的行，之后永久静默。
+	// 这里每轮把文件当前位置到 EOF 的新增字节全部读出，跨轮保留未换行的半行。
+	var pending []byte
+	buf := make([]byte, 64*1024)
 
 	for {
 		select {
@@ -335,23 +340,56 @@ func tailLogs(ctx context.Context, f *os.File, level string, conn *sseConn, done
 		case <-done:
 			return
 		case <-ticker.C:
-			for scanner.Scan() {
-				line := scanner.Text()
-				if level != "" && !matchesLogLevel(line, level) {
-					continue
-				}
-				// 原始行逐字进 data：前端 parseLine 收到的就是文件里的那条 JSON 记录。
-				if err := conn.writeFrame("log", sseRaw(line)); err != nil {
-					logger.Debug("日志流写出失败，停止推送", "error", err)
+		}
+
+		for {
+			n, err := f.Read(buf)
+			if n > 0 {
+				pending = append(pending, buf[:n]...)
+				var cont bool
+				pending, cont = emitLogLines(pending, level, conn, logger)
+				if !cont {
 					return
 				}
 			}
-			if err := scanner.Err(); err != nil {
+			if err == nil {
+				continue
+			}
+			if !errors.Is(err, io.EOF) {
 				// 前端把 error 帧的 data 当人类可读文本直接显示，所以这里给纯文本而不是对象。
 				// 不暴露底层错误细节，只给通用提示。
 				_ = conn.writeFrame("error", sseRaw("读取日志文件失败"))
 				return
 			}
+			break
+		}
+		// 单行上限与 forEachLogLine 一致：一条始终等不到换行的超长行不该让连接无限攒内存。
+		if len(pending) > maxLogLineBytes {
+			_ = conn.writeFrame("error", sseRaw("读取日志文件失败"))
+			return
+		}
+	}
+}
+
+// emitLogLines 把 pending 中所有以换行结尾的完整行写出，返回尚未收尾的尾部与是否继续。
+//
+// 半行留到下一轮：一次追加可能只写到这里（文件增长与读取并发），提前把它当一行推给
+// 前端会得到截断的 JSON 记录。
+func emitLogLines(pending []byte, level string, conn *sseConn, logger *slog.Logger) ([]byte, bool) {
+	for {
+		i := bytes.IndexByte(pending, '\n')
+		if i < 0 {
+			return pending, true
+		}
+		line := strings.TrimSuffix(string(pending[:i]), "\r")
+		pending = pending[i+1:]
+		if level != "" && !matchesLogLevel(line, level) {
+			continue
+		}
+		// 原始行逐字进 data：前端 parseLine 收到的就是文件里的那条 JSON 记录。
+		if err := conn.writeFrame("log", sseRaw(line)); err != nil {
+			logger.Debug("日志流写出失败，停止推送", "error", err)
+			return nil, false
 		}
 	}
 }

@@ -571,6 +571,62 @@ func TestLogsStreamSendsRawLine(t *testing.T) {
 	}
 }
 
+// TestLogsStreamKeepsTailingAfterIdlePoll 核对日志流在「某一轮没有新行」之后仍然继续推送。
+//
+// 这条流面对的是一个此刻在末尾、之后持续增长的追加文件，两次写入之间必然隔着一轮
+// 读不到数据的轮询。读取器一旦把「这一轮读到 EOF」当成终点，之后写进来的行就永远
+// 收不到了——连接还是 200，面板上却一条实时行都没有。
+func TestLogsStreamKeepsTailingAfterIdlePoll(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "daemon.log")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("建日志文件失败: %v", err)
+	}
+	defer f.Close()
+
+	s, _ := newTestServer(t, func(cfg *APIConfig) {
+		cfg.LogFilePath = func() string { return path }
+	})
+	srv := httptest.NewServer(s.mux)
+	defer srv.Close()
+
+	resp, err := srv.Client().Get(srv.URL + "/api/v2/logs/stream?" +
+		httpcontract.AuthTokenQuery + "=" + queryToken())
+	if err != nil {
+		t.Fatalf("请求日志流失败: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("日志流状态码 %d，期望 200", resp.StatusCode)
+	}
+
+	a := newSSEAccumulator(resp.Body)
+	a.waitFor(t, "event: connected", 3*time.Second)
+
+	// 跨过一个完整的轮询间隔：这一轮读到的是 EOF，不是数据。
+	time.Sleep(logTailPollInterval + 500*time.Millisecond)
+
+	first := `{"level":"info","msg":"idle 之后的第一行"}`
+	if _, err := fmt.Fprintln(f, first); err != nil {
+		t.Fatalf("写日志失败: %v", err)
+	}
+	if text := a.waitFor(t, first, 5*time.Second); !strings.Contains(text, "event: log") {
+		t.Fatalf("第一行没推到，读到:\n%s", text)
+	}
+
+	// 再跨过一个空轮询：已推送过的读取器也必须继续跟文件。
+	time.Sleep(logTailPollInterval + 500*time.Millisecond)
+
+	second := `{"level":"warn","msg":"第二轮追加"}`
+	if _, err := fmt.Fprintln(f, second); err != nil {
+		t.Fatalf("写日志失败: %v", err)
+	}
+	if text := a.waitFor(t, second, 5*time.Second); !strings.Contains(text, "event: log") {
+		t.Fatalf("空轮询之后的追加丢失，读到:\n%s", text)
+	}
+}
+
 // TestLogsStreamRejectsOverCap 核对日志流满额回 503（而不是 events 的 10 才拒）。
 func TestLogsStreamRejectsOverCap(t *testing.T) {
 	dir := t.TempDir()
