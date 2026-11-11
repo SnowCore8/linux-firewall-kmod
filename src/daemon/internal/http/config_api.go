@@ -142,18 +142,16 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, re
 	}
 	path := h.getConfigPath()
 
-	// 目录模式（config_file 为空、配置由若干 YAML 文件合起来）不能走这条写路径：组合根给的
-	// 来源是目录，ReadFile 只会撞 EISDIR，转成「读取配置文件失败」之后运维无从判断是权限、
-	// 文件不存在还是部署形态不支持。这里在动手前就认出来，直接说明限制，且不尝试写任何文件——
-	// 目录里该改哪一份、要不要叠写，属于产品决策，不在这次「诚实失败」的范围里。
+	// 持锁保护读-改-写序列，防止并发请求互相覆盖
+	h.configFileMu.Lock()
+	defer h.configFileMu.Unlock()
+
+	// 目录模式检查必须在锁内：检查与加锁之间配置路径可能被热重载改变，
+	// 锁外检查会导致误判或写入错误路径。
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		WriteCode(w, httpcontract.Code40004, "更新配置失败：目录模式不支持通过面板保存配置，请编辑配置文件后重载")
 		return false
 	}
-
-	// 持锁保护读-改-写序列，防止并发请求互相覆盖
-	h.configFileMu.Lock()
-	defer h.configFileMu.Unlock()
 
 	// 局部更新以锁内的现值为底：锁外的旧值在并发请求下会丢掉另一个请求刚写的字段。
 	// 读锁只包住这一次拷贝；后续的读文件/合并/校验/写盘都在配置锁之外，不与热重载的

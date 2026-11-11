@@ -1338,11 +1338,9 @@ func (e *InboundExecutor) dispatchClusterHit(jail string, hit decision.ClusterHi
 		// 累计会被周期检测清空，而封禁根本没发生。
 		return false
 	}
-	// 线上原因只写「哪个 jail 的集群判定」：契约的 reason 是 str[32]（含 NUL，实际 31
-	// 字节），把 CIDR 与命中数拼进去必然超长，超长即编码失败——于是整条网段封禁静默
-	// 不下发，只有日志里一行告警。CIDR 本身就是封禁条目（/proc 与面板都显示它），命中
-	// 数与峰值在上面那行告警里，线上不需要重复。
-	reason := fmt.Sprintf("%s: cluster scan", jail)
+	// 线上原因写 jail 名 + 固定标签：契约的 reason 是 str[32]（含 NUL，实际 31 字节），
+	// jail 名超长时截断到 20 字节，留空间给 ": cluster"。CIDR 与命中数放日志。
+	reason := fmt.Sprintf("%.20s: cluster", jail)
 	// 下发形状与白名单路径一致：裸网络地址 + 前缀长度（CidrKey.Addr() 已归一）。
 	if err := e.sink.Send(hit.CIDR.Addr(), uint8(hit.CIDR.PrefixLen()), cfg.BanTime, reason); err != nil {
 		e.warn("集群网段封禁下发失败", "jail", jail, "cidr", hit.CIDR.String(), "error", err)

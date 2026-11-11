@@ -723,6 +723,7 @@ u32 fw_ban_fill_entries(u32 offset, u32 limit, struct fw_ban_row *rows) {
       u32 bkt, nbuckets = 1U << layer->bucket_bits;
 
       for (bkt = 0; bkt < nbuckets && count < limit; bkt++) {
+        spin_lock_bh(&layer->locks[bkt]);
         hlist_for_each_entry_rcu(n, &layer->buckets[bkt], hash) {
           if (idx++ < offset)
             continue;
@@ -737,6 +738,7 @@ u32 fw_ban_fill_entries(u32 offset, u32 limit, struct fw_ban_row *rows) {
           if (++count >= limit)
             break;
         }
+        spin_unlock_bh(&layer->locks[bkt]);
       }
     }
   }

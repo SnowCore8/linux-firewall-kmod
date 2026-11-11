@@ -160,12 +160,13 @@ func (db *DB) BatchDecayVectors(now int64) error {
 		return fmt.Errorf("decay risk vectors: %w", err)
 	}
 
+	// 删除只处理衰减后的近零行：用衰减后的字段值判断，不依赖 updated_at 匹配，
+	// 避免误删衰减期间新写入的向量（新行的 updated_at 也是 now，但字段值未被衰减）。
 	if _, err := tx.Exec(
 		`DELETE FROM ip_risk_vectors
-		 WHERE failure * ? + ban * ? + scan * ? + bruteforce * ? + ddos * ? + geo * ? + cluster * ? < 0.01
-		   AND updated_at = ?`,
+		 WHERE failure * ? + ban * ? + scan * ? + bruteforce * ? + ddos * ? + geo * ? + cluster * ? < 0.01`,
 		weights.Failure, weights.Ban, weights.Scan, weights.Bruteforce,
-		weights.DDoS, weights.Geo, weights.Cluster, now,
+		weights.DDoS, weights.Geo, weights.Cluster,
 	); err != nil {
 		return fmt.Errorf("delete decayed risk vectors: %w", err)
 	}
