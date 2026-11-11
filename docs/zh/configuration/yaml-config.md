@@ -138,6 +138,7 @@ jail 名是 `jails` 的键，本身不占字段。
 | `max_fin_per_second` | 整数 | 否 | 2000 | FIN 速率阈值 |
 | `static_threshold` | 布尔 | 否 | true | 静态阈值检测 |
 | `dynamic_threshold` | 布尔 | 否 | false | 动态阈值检测 |
+| `dynamic_threshold_ratio_x100` | 整数 | 否 | 300 | 动态阈值倍数 ×100（取值 100–1000） |
 | `ddos_detection` | 布尔 | 否 | true | DDoS 检测总开关 |
 | `max_bans_per_second` | 整数 | 否 | 200 | 每秒最多新增封禁数，泛洪保护 |
 | `max_rate_entries` | 整数 | 否 | 65536 | 速率表条目数 |
@@ -145,6 +146,11 @@ jail 名是 `jails` 的键，本身不占字段。
 
 `protect_open_ports` 关掉以后下发的是全零位图，速率判定面为空。
 这和「守护进程没跑」不一样，后者内核按全端口受保护处理。
+守护进程每 30 秒重扫一次 `/proc/net` 并重发位图，监听端口变化无需重启。
+
+三个检测开关（`static_threshold` / `dynamic_threshold` / `ddos_detection`）随
+`SET_CONFIG` 的运行期位下发，改配置后热重载即生效，不需要重载内核模块。
+`ddos.enabled` 是总开关：它或 `ddos_detection` 任一为 false，内核都会关掉检测。
 
 ## 五、`cluster` 段
 

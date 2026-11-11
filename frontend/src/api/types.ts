@@ -676,8 +676,9 @@ export interface IpAnomalyEntry {
 
 /**
  * 攻击源地理分布（GET /api/v2/stats/attack-geo）。
- * 当前实现无 GeoIP 读库：geoip_enabled 恒 false、points 恒 []、located_ips 恒 0；
- * 本机坐标三件套仍按配置返回。
+ * geoip_enabled 报 geoip_db_path 是否成功加载；points 是近一批封禁事件按 IP 去重、
+ * 逐个定位后按坐标桶聚合的结果。库未配置时 geoip_enabled=false、points=[]、
+ * located_ips=0；本机坐标三件套独立于地理库，来源见 server_location_source。
  */
 export interface AttackGeoResponse {
   geoip_enabled: boolean

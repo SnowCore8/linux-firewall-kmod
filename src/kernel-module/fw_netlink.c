@@ -726,6 +726,29 @@ static u32 fw_nl_apply_config(const struct fw_set_config *c) {
     }
   }
 
+  /*
+   * 三个检测开关共用 dynamic_threshold_flags 这个 u32：新加位而不加字段，
+   * SET_CONFIG 的长度因此保持不变，旧内核只是忽略未知的 flags 位。
+   * 动态阈值启用时必须带 ratio；关闭时不再要求 ratio（旧分支的「ratio 为 0
+   * 即拒绝」语义保留给单独使用 DYNAMIC_THRESHOLD 位的调用方）。
+   */
+  if (flags & FW_CONFIG_FLAGS_THRESHOLD_TOGGLES) {
+    u32 dt = be32_to_cpu(c->dynamic_threshold_flags);
+    u32 ratio = be32_to_cpu(c->dynamic_threshold_ratio_x100);
+    bool dyn = !!(dt & FW_DYN_THRESHOLD_FLAGS_ENABLED);
+
+    if (dyn && !ratio) {
+      rejected |= FW_CONFIG_FLAGS_THRESHOLD_TOGGLES;
+    } else {
+      WRITE_ONCE(fw_info.static_threshold_enabled, !!(dt & FW_DYN_THRESHOLD_FLAGS_STATIC));
+      WRITE_ONCE(fw_info.ddos_detection_enabled,
+                 !!(dt & FW_DYN_THRESHOLD_FLAGS_DDOS_DETECTION));
+      WRITE_ONCE(fw_info.dynamic_threshold_enabled, dyn);
+      if (dyn)
+        WRITE_ONCE(fw_info.dynamic_threshold_ratio_x100, ratio);
+    }
+  }
+
   if (flags & FW_CONFIG_FLAGS_BASELINE_UPDATE)
     fw_rate_update_baseline(be64_to_cpu(c->baseline_pps), be64_to_cpu(c->baseline_bps));
 
@@ -875,7 +898,8 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
             fw_nl_send_register_ack(portid, be32_to_cpu(h->seq), 0);
             goto next;
           }
-          pr_info("netlink: 原守护进程 portid=%u 已死，portid=%u 立即接管\n", old_portid, portid);
+          pr_info("netlink: 原守护进程 portid=%u 已死，portid=%u 立即接管\n",
+                  old_portid, portid);
           /* 重新加锁以完成注册 */
           spin_lock_irqsave(&fw_nl_daemon_lock, flags);
         }
@@ -908,7 +932,8 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
           pr_warn_ratelimited("netlink: 拒绝未注册 portid=%u 的指令\n", portid);
           goto next;
         }
-        pr_info("netlink: 原守护进程 portid=%u 超时，portid=%u 接管\n", registered_portid, portid);
+        pr_info("netlink: 原守护进程 portid=%u 超时，portid=%u 接管\n",
+                registered_portid, portid);
         fw_nl_daemon_portid = portid;
       }
       fw_nl_daemon_activity = jiffies;

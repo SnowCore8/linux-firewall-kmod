@@ -68,7 +68,7 @@ struct nf_hook_ops nf_ops_ipv4 = {
 if (!fw_wl_lookup(af, src) && !fw_local_lookup(af, src)) {
   if (fw_ban_lookup(af, src)) {
     banned = true;
-  } else if (likely(READ_ONCE(fw_ddos_detection)) && fw_ports_observe(dst_port)) {
+  } else if (likely(READ_ONCE(fw_info.ddos_detection_enabled)) && fw_ports_observe(dst_port)) {
     reason = fw_rate_observe(af, src, packet_len, protocol, tcp_flags, dst_port, &pps);
   }
 }

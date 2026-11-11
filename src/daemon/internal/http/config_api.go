@@ -70,11 +70,13 @@ func (h *APIHandlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 //
 // # 内核下发
 //
-// webui 段不参与 KernelConfigChange 的投影（那张表读 ddos 段），所以这条路由改不动内核取值；
-// 这里的下发是把**当前整份配置**按同一张投影表再发给内核一次，顺带把「文件 ddos 段与内核
-// 取值是否已经漂移」对齐。它是幂等的，部分位被拒也只记日志——响应载荷是配置快照
-// （WebuiConfigResponse），没有承载内核诊断的字段。契约给这条路由编了 50003，通道发不出去
-// 时按「依赖未就绪」回，与 GET /config 的 50003 同一口径。
+// 三个检测开关随 webui 段落盘，但内核投影读的是 ddos 段；patchWebuiYAML 会把
+// 同一组值同步写进 ddos 段，persistWebui 也会同步内存里的 cfg.Ddos。因此这条
+// 路由改动的开关会通过 KernelConfigChange 到达内核，不存在「面板显示改了、
+// 内核没变」的静默漂移。
+//
+// 契约给这条路由编了 50003，通道发不出去时按「依赖未就绪」回，与 GET /config
+// 的 50003 同一口径。
 //
 // # 业务码映射
 //
@@ -108,6 +110,7 @@ func (h *APIHandlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		cfg.Webui = updated
+		syncDdosToggles(cfg, updated)
 	}
 
 	WriteSuccess(w, webuiConfigResponse(cfg.Webui))
@@ -167,6 +170,7 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, up
 
 	// 文件已落新值，内存立即对齐（见函数注释）：此后内核下发成败都不再改变 GET /config 的答案。
 	cfg.Webui = updated
+	syncDdosToggles(cfg, updated)
 
 	if h.kernelConfig != nil {
 		change := newCfg.KernelConfigChange()
@@ -273,6 +277,13 @@ func applyWebuiUpdate(cur config.WebuiConfig, req *UpdateConfigRequest) (config.
 	return out, fileBacked
 }
 
+// syncDdosToggles 把面板的三个检测开关同步到内核投影读取的 ddos 段。
+func syncDdosToggles(cfg *config.Config, w config.WebuiConfig) {
+	cfg.Ddos.StaticThreshold = w.StaticThreshold
+	cfg.Ddos.DynamicThreshold = w.DynamicThreshold
+	cfg.Ddos.DdosDetection = w.DdosDetection
+}
+
 // validateWebui 校验合并后的 webui 取值（前端 types.ts 记的那组约束）。
 //
 // 校验的是**合并后的最终状态**而不是逐个提交字段：局部更新只改一两个字段，但契约的约束
@@ -343,6 +354,16 @@ func patchWebuiYAML(content string, w config.WebuiConfig) (string, error) {
 		"max_local_ip_cache":    w.MaxLocalIPCache,
 		"clear_logs_at":         w.ClearLogsAt,
 	}
+	// 三个检测开关同时写进 ddos 段：内核投影读这一段，重载也按 ddos 段取值。
+	// 其余 ddos 键（阈值、容量参数）保持原样。
+	ddos, _ := doc["ddos"].(map[string]any)
+	if ddos == nil {
+		ddos = map[string]any{}
+	}
+	ddos["static_threshold"] = w.StaticThreshold
+	ddos["dynamic_threshold"] = w.DynamicThreshold
+	ddos["ddos_detection"] = w.DdosDetection
+	doc["ddos"] = ddos
 	out, err := yaml.Marshal(doc)
 	if err != nil {
 		return "", err

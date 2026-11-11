@@ -82,6 +82,7 @@ var configFlagFields = []struct {
 	{ConfigFlagDynamicThreshold, "dynamic_threshold"},
 	{ConfigFlagBaselineUpdate, "baseline"},
 	{ConfigFlagDdosBanDuration, "ddos_ban_duration"},
+	{ConfigFlagThresholdToggles, "threshold_toggles"},
 }
 
 // Names 按位序列出该位图涉及的载荷字段名；空位图返回 nil。

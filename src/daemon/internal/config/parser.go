@@ -83,24 +83,25 @@ type yamlRegexEntry struct {
 
 // yamlDdos 是 DDoS 防护配置的 YAML 表示。
 type yamlDdos struct {
-	Enabled              *bool   `yaml:"enabled"`
-	GlobalConnRate       *uint32 `yaml:"global_conn_rate"`
-	AutoBanDuration      *uint32 `yaml:"auto_ban_duration"`
-	AutoBanThreshold     *uint32 `yaml:"auto_ban_threshold"`
-	CheckInterval        *uint32 `yaml:"check_interval"`
-	BaselineWarmupSample *uint32 `yaml:"baseline_warmup_samples"`
-	MaxSynPerSecond      *uint32 `yaml:"max_syn_per_second"`
-	MaxUDPPerSecond      *uint32 `yaml:"max_udp_per_second"`
-	MaxICMPPerSecond     *uint32 `yaml:"max_icmp_per_second"`
-	MaxACKPerSecond      *uint32 `yaml:"max_ack_per_second"`
-	MaxRSTPerSecond      *uint32 `yaml:"max_rst_per_second"`
-	MaxFINPerSecond      *uint32 `yaml:"max_fin_per_second"`
-	StaticThreshold      *bool   `yaml:"static_threshold"`
-	DynamicThreshold     *bool   `yaml:"dynamic_threshold"`
-	DdosDetection        *bool   `yaml:"ddos_detection"`
-	MaxBansPerSecond     *uint32 `yaml:"max_bans_per_second"`
-	MaxRateEntries       *uint32 `yaml:"max_rate_entries"`
-	ProtectOpenPorts     *bool   `yaml:"protect_open_ports"`
+	Enabled               *bool   `yaml:"enabled"`
+	GlobalConnRate        *uint32 `yaml:"global_conn_rate"`
+	AutoBanDuration       *uint32 `yaml:"auto_ban_duration"`
+	AutoBanThreshold      *uint32 `yaml:"auto_ban_threshold"`
+	CheckInterval         *uint32 `yaml:"check_interval"`
+	BaselineWarmupSample  *uint32 `yaml:"baseline_warmup_samples"`
+	MaxSynPerSecond       *uint32 `yaml:"max_syn_per_second"`
+	MaxUDPPerSecond       *uint32 `yaml:"max_udp_per_second"`
+	MaxICMPPerSecond      *uint32 `yaml:"max_icmp_per_second"`
+	MaxACKPerSecond       *uint32 `yaml:"max_ack_per_second"`
+	MaxRSTPerSecond       *uint32 `yaml:"max_rst_per_second"`
+	MaxFINPerSecond       *uint32 `yaml:"max_fin_per_second"`
+	StaticThreshold       *bool   `yaml:"static_threshold"`
+	DynamicThreshold      *bool   `yaml:"dynamic_threshold"`
+	DdosDetection         *bool   `yaml:"ddos_detection"`
+	DynamicThresholdRatio *uint32 `yaml:"dynamic_threshold_ratio_x100"`
+	MaxBansPerSecond      *uint32 `yaml:"max_bans_per_second"`
+	MaxRateEntries        *uint32 `yaml:"max_rate_entries"`
+	ProtectOpenPorts      *bool   `yaml:"protect_open_ports"`
 }
 
 // yamlWebui 是 Web UI 配置的 YAML 表示。
@@ -630,6 +631,9 @@ func applyDdos(yc *yamlConfig, cfg *Config) error {
 	setBool(&cfg.Ddos.StaticThreshold, d.StaticThreshold)
 	setBool(&cfg.Ddos.DynamicThreshold, d.DynamicThreshold)
 	setBool(&cfg.Ddos.DdosDetection, d.DdosDetection)
+	if err := setU32Bounded(&cfg.Ddos.DynamicThresholdRatioX100, d.DynamicThresholdRatio, 100, 1000, "ddos.dynamic_threshold_ratio_x100"); err != nil {
+		return err
+	}
 	if err := setU32Bounded(&cfg.Ddos.MaxBansPerSecond, d.MaxBansPerSecond, 1, 10000, "ddos.max_bans_per_second"); err != nil {
 		return err
 	}
@@ -679,6 +683,17 @@ func applyWebui(yc *yamlConfig, cfg *Config) error {
 	setBool(&cfg.Webui.StaticThreshold, w.StaticThreshold)
 	setBool(&cfg.Webui.DynamicThreshold, w.DynamicThreshold)
 	setBool(&cfg.Webui.DdosDetection, w.DdosDetection)
+	// webui.* 是面板表单的持久化位置，ddos.* 是内核下发读取的单一来源。
+	// YAML 两段都写时以显式给出的 webui 键为准（PUT /config 只改这一处）。
+	if w.StaticThreshold != nil {
+		cfg.Ddos.StaticThreshold = *w.StaticThreshold
+	}
+	if w.DynamicThreshold != nil {
+		cfg.Ddos.DynamicThreshold = *w.DynamicThreshold
+	}
+	if w.DdosDetection != nil {
+		cfg.Ddos.DdosDetection = *w.DdosDetection
+	}
 	if err := setU32Bounded(&cfg.Webui.MaxBanEntries, w.MaxBanEntries, 1, 10_000_000, "webui.max_ban_entries"); err != nil {
 		return err
 	}

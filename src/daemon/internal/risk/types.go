@@ -69,7 +69,12 @@ func (v *RiskVector) Add(other RiskVector) {
 //
 // days 是自上次事件以来的天数。衰减后每个维度独立乘以 DecayFactor(days)。
 func (v *RiskVector) Decay(days float64) {
-	factor := DecayFactor(days)
+	v.DecayWithHalfLife(days, HalfLifeDays)
+}
+
+// DecayWithHalfLife 按给定半衰期衰减；halfLifeDays <= 0 时用默认 7 天。
+func (v *RiskVector) DecayWithHalfLife(days, halfLifeDays float64) {
+	factor := DecayFactorWithHalfLife(days, halfLifeDays)
 	v.Failure *= factor
 	v.Ban *= factor
 	v.Scan *= factor

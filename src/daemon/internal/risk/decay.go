@@ -17,10 +17,19 @@ const HalfLifeDays = 7.0
 //
 // 纯函数，不依赖任何状态，便于测试。
 func DecayFactor(days float64) float64 {
+	return DecayFactorWithHalfLife(days, HalfLifeDays)
+}
+
+// DecayFactorWithHalfLife 是可用自定义半衰期的衰减因子。halfLifeDays <= 0 时
+// 回落到默认半衰期。
+func DecayFactorWithHalfLife(days, halfLifeDays float64) float64 {
 	if days <= 0 {
 		return 1.0
 	}
-	return math.Pow(0.5, days/HalfLifeDays)
+	if halfLifeDays <= 0 {
+		halfLifeDays = HalfLifeDays
+	}
+	return math.Pow(0.5, days/halfLifeDays)
 }
 
 // DaysSince 计算自 lastEventAt（Unix 秒）至 now（Unix 秒）的天数。

@@ -10,12 +10,17 @@
 package http
 
 import (
+	"fmt"
 	"net/http"
+	"net/netip"
+	"sort"
 	"strconv"
 	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/analysis"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/geoip"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 )
 
 func parseLimit(r *http.Request, defaultLimit, maxLimit int) int {
@@ -277,30 +282,158 @@ func (h *APIHandlers) BanDurationHistogram(w http.ResponseWriter, r *http.Reques
 // 而再多就被 limit 本身的成本超过了——这一列没有索引可走，读的是全表尾部。
 const banDurationSampleLimit = 10000
 
+// attackGeoEventLimit 是地理分布一次读取的封禁事件条数。
+//
+// 与其余分析同量级（2000）：事件表按时间倒序取尾部，再按 IP 去重后逐条查库；
+// 读得更多只会把同一批高频攻击 IP 重复计入，不会增加地图上的点。
+const attackGeoEventLimit = 2000
+
+// attackGeoPointLimit 是地图一次返回的定位点上限（按封禁次数取前 N 个）。
+const attackGeoPointLimit = 200
+
 // AttackGeo 返回攻击源地理分布（GET /api/v2/stats/attack-geo）。
 //
-// 本守护进程**没有 GeoIP 读库**：配置项 geoip_db_path 没有任何消费方（仓库内无 mmdb 读取
-// 实现）。这一条因此恒为 geoip_enabled=false、points 空、两个计数 0。
+// 数据源：近 attackGeoEventLimit 条封禁事件按 IP 去重，逐个用 mmdb 定位；同一定位桶
+// （坐标保留两位小数）聚合出 unique_ips / total_bans / top_ip / last_banned_at。
+// 未配置 geoip_db_path 或库打不开时 geoip_enabled=false、points 空、两个计数 0；
+// 库在场但事件读不到时同样是 200 空读数（契约没给这条路由编错误码）。
 //
-// 本机坐标三件套**有**真源（config 的 server_latitude/server_longitude，必须成对给出），
-// 所以它照实返回：前端画地图时靠它决定本机标记与弧线，地理库缺席不影响这件事。
-// server_location_source 只有 "config" 与 "none" 两种取值——契约还留着 "detected"
-// （由 egress 探测推断），那个路径本实现没有做，不拿猜出来的经纬度冒充探测结果。
+// 本机坐标三件套：配置给出坐标为 "config"；配置没给且出口探测成功为 "detected"；
+// 都没有则 source="none"、经纬度为 null。source/config 的取值由组合根算好放在
+// config.ServerCoordsSource，这里只做投影，不在这里探测网络。
 func (h *APIHandlers) AttackGeo(w http.ResponseWriter, r *http.Request) {
 	resp := AttackGeoResponse{
-		GeoipEnabled:         false,
+		GeoipEnabled:         h.geoIP != nil,
 		Points:               []GeoPoint{},
-		TotalIPs:             0,
-		LocatedIPs:           0,
 		ServerLocationSource: "none",
 	}
-	cfg := h.currentConfig()
-	if cfg != nil && cfg.ServerCoordsSet {
-		lat := cfg.ServerLatitude
-		lon := cfg.ServerLongitude
-		resp.ServerLatitude = &lat
-		resp.ServerLongitude = &lon
-		resp.ServerLocationSource = "config"
+	if cfg := h.currentConfig(); cfg != nil {
+		src := cfg.ServerCoordsSource
+		if src == "" {
+			src = "none"
+			if cfg.ServerCoordsSet {
+				src = "config"
+			}
+		}
+		// 热重载可能把配置里的坐标撤掉：来源标着 config 但坐标已不在时按无坐标处理。
+		if src == "config" && !cfg.ServerCoordsSet {
+			src = "none"
+		}
+		if src != "none" {
+			lat := cfg.ServerLatitude
+			lon := cfg.ServerLongitude
+			resp.ServerLatitude = &lat
+			resp.ServerLongitude = &lon
+			resp.ServerLocationSource = src
+		}
 	}
+
+	if h.geoIP == nil || h.db == nil {
+		WriteSuccess(w, resp)
+		return
+	}
+	events, err := h.db.GetBanEvents(attackGeoEventLimit)
+	if err != nil {
+		h.server.logger.Error("读取封禁事件失败，攻击源地理分布为空", "error", err)
+		WriteSuccess(w, resp)
+		return
+	}
+
+	points, total, located := h.aggregateGeo(events)
+	resp.Points = points
+	resp.TotalIPs = total
+	resp.LocatedIPs = located
 	WriteSuccess(w, resp)
+}
+
+// aggregateGeo 把封禁事件聚合成地图定位点。
+//
+// 返回 (points, 去重后的封禁 IP 总数, 其中有定位的 IP 数)。点按 total_bans 降序，
+// 超过 attackGeoPointLimit 时只留前 N 个（计数仍按全量算，面板标题与点集不矛盾）。
+func (h *APIHandlers) aggregateGeo(events []persist.BanEvent) ([]GeoPoint, uint32, uint32) {
+	type ipStat struct {
+		bans uint32
+		last int64
+	}
+	byIP := make(map[netip.Addr]*ipStat, len(events))
+	for _, ev := range events {
+		addr, err := netip.ParseAddr(ev.IP)
+		if err != nil || !addr.IsValid() {
+			continue
+		}
+		addr = addr.Unmap()
+		st := byIP[addr]
+		if st == nil {
+			st = &ipStat{}
+			byIP[addr] = st
+		}
+		st.bans++
+		if ev.BannedAt > st.last {
+			st.last = ev.BannedAt
+		}
+	}
+
+	type bucket struct {
+		loc     geoip.Location
+		ips     uint32
+		bans    uint32
+		topIP   string
+		topBans uint32
+		last    int64
+	}
+	buckets := make(map[string]*bucket)
+	var located uint32
+	for addr, st := range byIP {
+		loc, ok := h.geoIP.Lookup(addr)
+		if !ok {
+			continue
+		}
+		located++
+		// 两位小数约 1 公里：City 级库的相邻地址本就落在同一个定位桶里，
+		// 不压缩的话一座城市会碎成成百上千个几乎重合的点。
+		key := fmt.Sprintf("%.2f,%.2f", loc.Latitude, loc.Longitude)
+		b := buckets[key]
+		if b == nil {
+			b = &bucket{loc: loc, last: st.last}
+			buckets[key] = b
+		}
+		b.ips++
+		b.bans += st.bans
+		if st.bans > b.topBans {
+			b.topBans = st.bans
+			b.topIP = addr.String()
+		}
+		if st.last > b.last {
+			b.last = st.last
+		}
+	}
+
+	points := make([]GeoPoint, 0, len(buckets))
+	for _, b := range buckets {
+		points = append(points, GeoPoint{
+			Latitude:     b.loc.Latitude,
+			Longitude:    b.loc.Longitude,
+			CountryCode:  b.loc.CountryCode,
+			Country:      b.loc.Country,
+			City:         b.loc.City,
+			Subdivision:  b.loc.Subdivision,
+			UniqueIPs:    b.ips,
+			TotalBans:    b.bans,
+			TopIP:        b.topIP,
+			LastBannedAt: b.last,
+		})
+	}
+	sort.Slice(points, func(i, j int) bool {
+		if points[i].TotalBans != points[j].TotalBans {
+			return points[i].TotalBans > points[j].TotalBans
+		}
+		if points[i].UniqueIPs != points[j].UniqueIPs {
+			return points[i].UniqueIPs > points[j].UniqueIPs
+		}
+		return points[i].LastBannedAt > points[j].LastBannedAt
+	})
+	if len(points) > attackGeoPointLimit {
+		points = points[:attackGeoPointLimit]
+	}
+	return points, uint32(len(byIP)), located
 }

@@ -211,9 +211,9 @@ type BanDurationHistogramResponse struct {
 
 // AttackGeoResponse 是攻击源地理分布（GET /api/v2/stats/attack-geo）。
 //
-// 本守护进程**没有 GeoIP 读库**（配置项 geoip_db_path 无人消费，仓库内无 mmdb 读取实现），
-// 因此 geoip_enabled 恒为 false、points 恒为空、两个计数恒为 0；本机坐标三件套仍有真源
-// （config 的 server_latitude/longitude），照常给出。
+// geoip_enabled 报 geoip_db_path 指向的 mmdb 是否成功加载；points 由近一批封禁事件
+// 按 IP 去重、逐个定位后按坐标桶聚合，total_ips/located_ips 分别是去重 IP 数与其中
+// 有定位的数。库未配置时 points 空、两个计数 0；本机坐标三件套独立于地理库，照常给出。
 type AttackGeoResponse struct {
 	GeoipEnabled         bool       `json:"geoip_enabled"`
 	Points               []GeoPoint `json:"points"`
@@ -224,8 +224,8 @@ type AttackGeoResponse struct {
 	ServerLocationSource string     `json:"server_location_source"`
 }
 
-// GeoPoint 是一个定位结果点。当前没有任何产出路径会构造它（points 恒空），字段形状
-// 仍按契约保留：前端按这张表画地图，缺了名字就连不上。
+// GeoPoint 是一个定位聚合点：同一坐标桶（约 1 公里）内的封禁 IP 合并成一行，
+// UniqueIPs/TotalBans 是桶内计数，TopIP 是桶内封禁次数最多的地址。
 type GeoPoint struct {
 	Latitude     float64 `json:"latitude"`
 	Longitude    float64 `json:"longitude"`

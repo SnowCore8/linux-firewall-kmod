@@ -22,10 +22,13 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/daemonize"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/geoip"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/http"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/jail"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/kernel"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/logger"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/netports"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/runtime"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/telemetry"
@@ -40,6 +43,10 @@ var panelDir = panelres.PanelDir
 // factoryDefaultPassword 是 config/default.yaml 的出厂占位口令。它随仓库公开分发、
 // 人尽可猜，本身不是机密；这里只用它做启动期比对，检测「面板仍在用出厂口令」。
 const factoryDefaultPassword = "changeme"
+
+// daemonPIDFile 是 `-d` 模式写下的 PID 文件路径（与 --rollback 的查找口径无关：
+// 回滚按进程名找，不读这个文件）。
+const daemonPIDFile = "/run/firewall-daemon.pid"
 
 func main() {
 	if err := run(os.Args); err != nil {
@@ -67,6 +74,16 @@ func run(args []string) error {
 	// 回滚模式是独立短路径：不加载配置，只给运行中的守护进程发 SIGUSR1。
 	if parsed.Rollback {
 		return requestRollback()
+	}
+
+	// 守护化必须在建立信号层之前完成：父进程重新执行出子进程后立刻退出，
+	// 子进程带着 FIREWALL_DAEMONIZED 继续走完整条装配路径。子进程退出时删除
+	// PID 文件；父进程不删——它手里没有子进程的生命周期。
+	if parsed.Daemon && !daemonize.IsChild() {
+		return daemonize.Spawn(daemonPIDFile)
+	}
+	if parsed.Daemon {
+		defer func() { _ = daemonize.RemovePIDFile(daemonPIDFile) }()
 	}
 
 	// 信号层必须早于任何 goroutine 建立，否则启动窗口内送达的信号会丢失。
@@ -119,6 +136,45 @@ func run(args []string) error {
 			"怎么修", "设置 FIREWALL_METRICS_PASSWORD（随包 EnvironmentFile 已备好），或把 defaults.metrics_password 改成强随机口令，改后重启守护进程")
 	}
 
+	// GeoIP 读库是可选的：未配置或打不开时地理分布接口照常应答，只是不定位攻击源。
+	// 出口探测是显式开关（默认关）：它会把本机公网 IP 发给探测端点，只在该开关打开
+	// 且配置没给坐标时执行；失败只告警，不阻塞启动。
+	var geoReader *geoip.Reader
+	if cfg.GeoipDBPath != "" {
+		reader, gerr := geoip.Open(cfg.GeoipDBPath)
+		if gerr != nil {
+			logger.Warn("GeoIP 数据库加载失败，攻击源地理分布不可用", "path", cfg.GeoipDBPath, "error", gerr)
+		} else {
+			geoReader = reader
+			defer reader.Close()
+			logger.Info("GeoIP 数据库已加载", "path", cfg.GeoipDBPath)
+		}
+	}
+	cfg.ServerCoordsSource = "none"
+	if cfg.ServerCoordsSet {
+		cfg.ServerCoordsSource = "config"
+	} else if cfg.GeoipDetectEgress && cfg.GeoipEgressProbeURL != "" {
+		logger.Info("已向探测端点请求本机出口 IP", "url", cfg.GeoipEgressProbeURL)
+		probeCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		egress, perr := geoip.DetectEgress(probeCtx, cfg.GeoipEgressProbeURL)
+		cancel()
+		switch {
+		case perr != nil:
+			logger.Warn("本机出口 IP 探测失败，地图不显示本机坐标", "error", perr)
+		case geoReader == nil:
+			logger.Warn("已探测到本机出口 IP，但未加载 GeoIP 数据库，无法换算坐标", "ip", egress.String())
+		default:
+			if loc, ok := geoReader.Lookup(egress); ok {
+				cfg.ServerLatitude = loc.Latitude
+				cfg.ServerLongitude = loc.Longitude
+				cfg.ServerCoordsSource = "detected"
+				logger.Info("本机坐标来自出口探测", "ip", egress.String())
+			} else {
+				logger.Warn("本机出口 IP 不在 GeoIP 数据库中，无法换算坐标", "ip", egress.String())
+			}
+		}
+	}
+
 	if err := checkProcfs(); err != nil {
 		return err
 	}
@@ -157,7 +213,12 @@ func run(args []string) error {
 			recoveryDone := db.StartReputationRecoveryScheduler(0, 1, 100, dbStopCh)
 			// 判定层每行日志都要扣一次信誉分并立刻取分，直接查库会把入站主链路钉在磁盘上；
 			// 这里按 IP 折叠，与库自带的两个调度器共用同一条 stop 通道（关停时最后刷一次盘）。
-			facts = persist.NewFacts(db, persist.FactsOptions{Logger: logger})
+			facts = persist.NewFacts(db, persist.FactsOptions{
+				Logger:            logger,
+				RiskEngineEnabled: cfg.RiskEngine.Enabled,
+				RiskWeights:       cfg.RiskEngine.Weights,
+				RiskHalfLifeDays:  cfg.RiskEngine.HalfLifeDays,
+			})
 			factsDone := facts.StartFlusher(dbStopCh)
 			// 关停顺序：先停各调度器，再等所有后台任务结束，最后才关库。
 			// 这段 defer 在 db.Close 之后登记，LIFO 执行时排在它前面。
@@ -199,6 +260,51 @@ func run(args []string) error {
 			kernelClient = kernel.NewClient(transport, router)
 			logger.Info("内核 netlink 链路已就绪")
 		}
+	}
+
+	// 受保护端口位图：protect_open_ports 打开时把本机非回环监听端口发给内核，
+	// 关闭时下发全零位图（语义见 config.DdosConfig.ProtectOpenPorts）。
+	//
+	// 周期性重扫而不是只在启动时发一次：监听端口随服务增减变化，内核模块重载也会
+	// 丢掉位图；每 30 秒重发一遍（8 KiB 报文）比「等下一次重启才对」更接近配置承诺。
+	var pushProtectedPorts func()
+	if kernelClient != nil {
+		// 租约确认与 30 秒重扫可能并发推同一份位图，计数用原子量避免数据竞争。
+		var lastCount atomic.Int64
+		lastCount.Store(-1)
+		pushProtectedPorts = func() {
+			var bitmap [contract.ProtectedPortsLen]byte
+			count := 0
+			if cfg.Ddos.ProtectOpenPorts {
+				bmp, n, err := netports.ListeningPorts("/proc/net")
+				if err != nil {
+					logger.Warn("扫描本机监听端口失败，保留内核现有位图", "error", err)
+					return
+				}
+				bitmap, count = bmp, n
+			}
+			if _, err := kernelClient.SetProtectedPorts(bitmap); err != nil {
+				logger.Warn("下发受保护端口位图失败", "ports", count, "error", err)
+				return
+			}
+			if prev := lastCount.Swap(int64(count)); prev != int64(count) {
+				logger.Info("受保护端口位图已下发内核", "ports", count)
+			}
+		}
+		portsToken := runtime.NewShutdown()
+		sup.Spawn("protected-ports", portsToken, func() {
+			pushProtectedPorts()
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-portsToken.Done():
+					return
+				case <-ticker.C:
+					pushProtectedPorts()
+				}
+			}
+		})
 	}
 
 	// 重试队列：DB 写入失败时暂存操作，后台协程按指数退避重试。
@@ -334,6 +440,7 @@ func run(args []string) error {
 				GetRateSamples: kernelStore.RateSamples,
 				KernelVersion:  kernelModuleVersion,
 				ThreatFeeds:    feedMgr,
+				GeoIP:          geoReader,
 			})
 			// 路由全部由 RegisterRoutes 按契约 pattern 注册，包括 /api/v2/events 与
 			// /metrics：它们都在契约的认证组里，在这里另注册一遍会绕过 RequireAuth。
@@ -424,8 +531,13 @@ func run(args []string) error {
 			Whitelist: bans.GlobalWhitelist(),
 			// 内核侧配置变更与封禁下发被拒要交给入站执行体落地（配置所有权在它手上）。
 			Directives: kernelCmd,
-			// 注册成功之前内核丢弃一切指令；trusted_ips 必须在确认租约之后才发。
-			OnLeaseClaimed: pushConfiguredTrustedIPs,
+			// 注册成功之前内核丢弃一切指令；trusted_ips 与端口位图必须在确认租约之后才发。
+			OnLeaseClaimed: func() {
+				pushConfiguredTrustedIPs()
+				if pushProtectedPorts != nil {
+					pushProtectedPorts()
+				}
+			},
 		})
 		if err != nil {
 			logger.Error("内核事件泵装配失败，内核事件将无人消费", "error", err)

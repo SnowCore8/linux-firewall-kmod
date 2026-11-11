@@ -30,7 +30,7 @@ USAGE:
 OPTIONS:
     -c, --config <FILE>     配置文件路径 (默认: %s)
     -C, --config-dir <DIR>  配置目录路径 (加载目录下所有 .yaml 文件)
-    -d, --daemon            以守护进程模式运行 (后台化 + PID 文件)
+    -d, --daemon            以守护进程模式运行 (后台化 + PID 文件 /run/firewall-daemon.pid)
         --no-strict         宽松模式: 忽略未知配置 key (默认: 严格模式)
         --rollback          回滚到上一个配置版本 (需守护进程运行中)
     -h, --help              显示帮助信息

@@ -640,6 +640,7 @@ struct fw_info {
   u64 max_fin_per_second;
   bool dynamic_threshold_enabled;
   bool static_threshold_enabled;
+  bool ddos_detection_enabled; /* 运行期总开关，初值取自模块参数 */
   u32 dynamic_threshold_ratio_x100;
   u64 baseline_pps; /* EWMA α=0.01，由 daemon 或内核更新 */
   u64 baseline_bps;

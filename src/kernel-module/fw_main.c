@@ -169,6 +169,7 @@ static void fw_info_defaults_init(void) {
   /* 阈值开关与动态比例 */
   fw_info.static_threshold_enabled = fw_static_threshold != 0;
   fw_info.dynamic_threshold_enabled = fw_dynamic_threshold != 0;
+  fw_info.ddos_detection_enabled = fw_ddos_detection != 0;
   fw_info.dynamic_threshold_ratio_x100 = DEFAULT_DYNAMIC_THRESHOLD_RATIO_X100;
   fw_info.baseline_pps = 0;
   fw_info.baseline_bps = 0;

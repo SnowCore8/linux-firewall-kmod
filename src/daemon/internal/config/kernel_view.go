@@ -24,10 +24,9 @@ import "github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
 //
 //   - max_bytes_per_second：配置模型里没有对应字段（ddos 段只有包速率，没有字节速率）。
 //     零值会被内核拒绝，硬凑一个来源等于替用户决定字节上限。
-//   - dynamic_threshold：内核把 ratio_x100 与启用位捆在同一位上——ratio 为 0 时整位被拒，
-//     ratio 非 0 时**同时**覆写 dynamic_threshold_enabled。配置里的 ddos.dynamic_threshold
-//     只是一个布尔、没有倍数，因此无论带什么 ratio 都会顺改掉内核的启用状态。等配置模型
-//     补上倍数再进这张表。
+//   - dynamic_threshold（旧位）：内核把 ratio_x100 与启用位捆在同一位上，ratio 为 0
+//     时整位被拒。本投影改用 THRESHOLD_TOGGLES 位：启用时带 dynamic_threshold_ratio_x100，
+//     关闭时不再要求 ratio，因此布尔配置不会再被内核的旧语义卡住。
 //   - baseline：载荷里那两个字段是 EWMA 的**采样输入**（fw_rate_update_baseline，α=1/100），
 //     不是配置项。从配置发一次等于往滑动平均里注一个样本，发 0 会把已学到的基线拉向 0。
 //     它属于测量循环，不属于配置写入。
@@ -35,10 +34,11 @@ import "github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
 //     fw_ban_time 是 u32 秒数，没有「永久」这个取值。把 -1 转成 42 亿发过去，收到的拒绝位
 //     说的是一个不存在的 bug；这一位直接不发，永久语义留在每条封禁指令的 duration 里。
 //
-// 其余配置项（ddos.enabled / static_threshold / ddos_detection / max_bans_per_second /
-// max_rate_entries / auto_ban_threshold / baseline_warmup_samples / protect_open_ports）
-// 在契约的 ConfigFlags 表里根本没有对应位，所以不是「这条路没接通」，而是这条路上没有门。
-// 其中几个还是模块参数：内核只在 init 时读一次，运行期写 sysfs 不会改变已生效的容量。
+// 其余配置项（ddos.max_bans_per_second / max_rate_entries / auto_ban_threshold /
+// baseline_warmup_samples）在契约的 ConfigFlags 表里根本没有对应位，所以不是
+// 「这条路没接通」，而是这条路上没有门。它们之中有模块参数，内核只在 init 时读一次，
+// 运行期写 sysfs 不会改变已生效的容量。protect_open_ports 不走本消息，由
+// SET_PROTECTED_PORTS 单独下发端口位图。
 func (c *Config) KernelConfigChange() contract.SetConfig {
 	flags := contract.ConfigFlagRateWindow |
 		contract.ConfigFlagMaxPPS |
@@ -47,18 +47,34 @@ func (c *Config) KernelConfigChange() contract.SetConfig {
 		contract.ConfigFlagMaxICMP |
 		contract.ConfigFlagMaxACK |
 		contract.ConfigFlagMaxRST |
-		contract.ConfigFlagMaxFIN
+		contract.ConfigFlagMaxFIN |
+		contract.ConfigFlagThresholdToggles
+
+	// 三个检测开关共用 dynamic_threshold_flags 字段；ddos.enabled 是总开关，
+	// 与 ddos.ddos_detection 任一为 false 都关闭内核检测。
+	toggles := uint32(0)
+	if c.Ddos.StaticThreshold {
+		toggles |= contract.DynThresholdFlagStatic
+	}
+	if c.Ddos.Enabled && c.Ddos.DdosDetection {
+		toggles |= contract.DynThresholdFlagDdosDetection
+	}
+	if c.Ddos.DynamicThreshold {
+		toggles |= contract.DynThresholdFlagEnabled
+	}
 
 	change := contract.SetConfig{
 		ConfigPayload: contract.ConfigPayload{
-			RateWindowSeconds:   c.Ddos.CheckInterval,
-			MaxPacketsPerSecond: uint64(c.Ddos.GlobalConnRate),
-			MaxSynPerSecond:     uint64(c.Ddos.MaxSynPerSecond),
-			MaxUDPPerSecond:     uint64(c.Ddos.MaxUDPPerSecond),
-			MaxICMPPerSecond:    uint64(c.Ddos.MaxICMPPerSecond),
-			MaxACKPerSecond:     uint64(c.Ddos.MaxACKPerSecond),
-			MaxRSTPerSecond:     uint64(c.Ddos.MaxRSTPerSecond),
-			MaxFINPerSecond:     uint64(c.Ddos.MaxFINPerSecond),
+			RateWindowSeconds:         c.Ddos.CheckInterval,
+			MaxPacketsPerSecond:       uint64(c.Ddos.GlobalConnRate),
+			MaxSynPerSecond:           uint64(c.Ddos.MaxSynPerSecond),
+			MaxUDPPerSecond:           uint64(c.Ddos.MaxUDPPerSecond),
+			MaxICMPPerSecond:          uint64(c.Ddos.MaxICMPPerSecond),
+			MaxACKPerSecond:           uint64(c.Ddos.MaxACKPerSecond),
+			MaxRSTPerSecond:           uint64(c.Ddos.MaxRSTPerSecond),
+			MaxFINPerSecond:           uint64(c.Ddos.MaxFINPerSecond),
+			DynamicThresholdFlags:     toggles,
+			DynamicThresholdRatioX100: c.Ddos.DynamicThresholdRatioX100,
 		},
 	}
 

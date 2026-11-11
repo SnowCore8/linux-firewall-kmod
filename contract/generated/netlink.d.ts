@@ -60,10 +60,13 @@ export const ConfigFlags = {
   DYNAMIC_THRESHOLD: 1 << 10,
   BASELINE_UPDATE: 1 << 11,
   DDOS_BAN_DURATION: 1 << 12,
+  THRESHOLD_TOGGLES: 1 << 13,
 } as const;
 
 export const DynThresholdFlags = {
   ENABLED: 1 << 0,
+  STATIC: 1 << 1,
+  DDOS_DETECTION: 1 << 2,
 } as const;
 
 export interface MsgHdr {

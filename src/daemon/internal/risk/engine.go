@@ -16,10 +16,11 @@ import (
 //
 // 线程安全：所有公开方法都可并发调用。
 type Engine struct {
-	mu       sync.RWMutex
-	vectors  map[string]*cachedVector
-	weights  DimensionWeights
-	maxSize  int
+	mu           sync.RWMutex
+	vectors      map[string]*cachedVector
+	weights      DimensionWeights
+	halfLifeDays float64
+	maxSize      int
 }
 
 const defaultMaxSize = 100000
@@ -35,10 +36,19 @@ type cachedVector struct {
 //
 // weights 是各维度权重（默认均为 1.0）。
 func NewEngine(weights DimensionWeights) *Engine {
+	return NewEngineWithHalfLife(weights, HalfLifeDays)
+}
+
+// NewEngineWithHalfLife 创建引擎并指定向量衰减半衰期（天）。<=0 时用默认值。
+func NewEngineWithHalfLife(weights DimensionWeights, halfLifeDays float64) *Engine {
+	if halfLifeDays <= 0 {
+		halfLifeDays = HalfLifeDays
+	}
 	return &Engine{
-		vectors: make(map[string]*cachedVector),
-		weights: weights,
-		maxSize: defaultMaxSize,
+		vectors:      make(map[string]*cachedVector),
+		weights:      weights,
+		halfLifeDays: halfLifeDays,
+		maxSize:      defaultMaxSize,
 	}
 }
 
@@ -75,7 +85,7 @@ func (e *Engine) RecordEvent(ip string, eventType EventType, increment float64) 
 	} else {
 		// 先对旧向量施加衰减
 		days := DaysSince(now, cached.lastEvent)
-		cached.vector.Decay(days)
+		cached.vector.DecayWithHalfLife(days, e.halfLifeDays)
 		cached.lastEvent = now
 	}
 
@@ -117,7 +127,7 @@ func (e *Engine) GetVector(ip string) (RiskVector, bool) {
 	now := time.Now().Unix()
 	days := DaysSince(now, cached.lastEvent)
 	vec := cached.vector
-	vec.Decay(days)
+	vec.DecayWithHalfLife(days, e.halfLifeDays)
 	return vec, true
 }
 

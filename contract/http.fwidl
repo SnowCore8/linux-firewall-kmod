@@ -934,14 +934,14 @@ route GET "/api/v2/stats/attack-geo" {
   handler = AttackGeo
   returns = type
   status = 200
-  note = "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。当前实现**没有 GeoIP 读库**（仓库内无 mmdb 读取实现，也无 egress 探测），因此 geoip_enabled 恒为 false、points 恒为 []、total_ips/located_ips 恒为 0——这是「没有读数」而不是「没有攻击来自远方」。本机坐标三件套有真源（配置项 server_latitude/server_longitude，必须成对给出）：设了就回数值 + source=\"config\"，没设就两个 null + source=\"none\"。契约里的第三个取值 \"detected\"（由 egress 探测推断，配置项 geoip_detect_egress）本实现没有做，不拿猜出来的经纬度冒充探测结果"
+  note = "攻击源地理分布；载荷 AttackGeoResponse。**不编业务码**：这条恒成功。数据源是近一批封禁事件按 IP 去重后逐个用 geoip_db_path 指向的 mmdb 定位；库未配置或打不开时 geoip_enabled=false、points 为空、total_ips/located_ips 为 0——这是「没有读数」而不是「没有攻击来自远方」。本机坐标三件套：配置项 server_latitude/server_longitude 成对给出时回数值 + source=\"config\"；配置没给且 geoip_detect_egress 探测成功时回探测坐标 + source=\"detected\"；都没有则两个 null + source=\"none\""
 }
 
 # 攻击源地理分布载荷。
 #
 # `geoip_enabled=false`（数据库未装配）时 points 为空、total_ips/located_ips 为 0，
-# 本机坐标三件套仍照常返回（它们不依赖地理库）。**当前实现就停在这个分支上**：
-# 配置项 geoip_db_path 没有任何消费方（仓库内无 mmdb 读取实现）。
+# 本机坐标三件套仍照常返回（它们不依赖地理库）。数据库在场时，读取近一批封禁事件，
+# 按 IP 去重后逐个定位，同一定位桶（坐标保留两位小数）聚合为一行。
 type AttackGeoResponse {
   # 地理解析是否可用（数据库是否已装配且可用）
   geoip_enabled: bool

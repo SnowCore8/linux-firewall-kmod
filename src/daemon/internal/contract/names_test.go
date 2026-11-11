@@ -65,17 +65,17 @@ func TestConfigFlagNamesCoverEveryBit(t *testing.T) {
 	all := ConfigFlagBanTime | ConfigFlagRateWindow | ConfigFlagMaxPPS | ConfigFlagMaxBPS |
 		ConfigFlagMaxSYN | ConfigFlagMaxUDP | ConfigFlagMaxICMP | ConfigFlagMaxACK |
 		ConfigFlagMaxRST | ConfigFlagMaxFIN | ConfigFlagDynamicThreshold |
-		ConfigFlagBaselineUpdate | ConfigFlagDdosBanDuration
+		ConfigFlagBaselineUpdate | ConfigFlagDdosBanDuration | ConfigFlagThresholdToggles
 
 	names := all.Names()
-	if len(names) != 13 {
-		t.Fatalf("全位图的名字 = %d 个，期望 13 个（%v）", len(names), names)
+	if len(names) != 14 {
+		t.Fatalf("全位图的名字 = %d 个，期望 14 个（%v）", len(names), names)
 	}
 	for _, bit := range []ConfigFlags{
 		ConfigFlagBanTime, ConfigFlagRateWindow, ConfigFlagMaxPPS, ConfigFlagMaxBPS,
 		ConfigFlagMaxSYN, ConfigFlagMaxUDP, ConfigFlagMaxICMP, ConfigFlagMaxACK,
 		ConfigFlagMaxRST, ConfigFlagMaxFIN, ConfigFlagDynamicThreshold,
-		ConfigFlagBaselineUpdate, ConfigFlagDdosBanDuration,
+		ConfigFlagBaselineUpdate, ConfigFlagDdosBanDuration, ConfigFlagThresholdToggles,
 	} {
 		if len(bit.Names()) != 1 {
 			t.Errorf("位 %#x 的名字数 = %d，期望 1 个（%v）", uint32(bit), len(bit.Names()), bit.Names())
@@ -88,8 +88,8 @@ func TestConfigFlagNamesCoverEveryBit(t *testing.T) {
 	if got := ConfigFlags(0).String(); got != "none" {
 		t.Errorf("零位图的 String() = %q，期望 \"none\"", got)
 	}
-	// 未定义的位（契约表之外）不进名字表：全 1 的位图也不该多出第 14 个名字。
-	if got := ConfigFlags(0xFFFF).Names(); len(got) != 13 {
-		t.Errorf("未定义位的名字数 = %d，期望仍是 13（%v）", len(got), got)
+	// 未定义的位（契约表之外）不进名字表：全 1 的位图也不该多出第 15 个名字。
+	if got := ConfigFlags(0xFFFF).Names(); len(got) != 14 {
+		t.Errorf("未定义位的名字数 = %d，期望仍是 14（%v）", len(got), got)
 	}
 }

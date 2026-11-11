@@ -75,9 +75,10 @@ ddos:
   max_ack_per_second: 20000   # ACK flood 阈值
   max_rst_per_second: 2000    # RST flood 阈值
   max_fin_per_second: 2000    # FIN flood 阈值
-  # DDoS 检测算法开关
+  # DDoS 检测算法开关（随 SET_CONFIG 运行期位下发，热重载即生效）
   static_threshold: true      # 静态阈值检测（默认开启）
   dynamic_threshold: false    # 动态阈值检测（默认关闭，基线×倍数）
+  dynamic_threshold_ratio_x100: 300  # 动态阈值倍数 ×100，取值 100–1000
   ddos_detection: true        # DDoS 检测总开关（默认开启）
   # 内核模块参数
   max_bans_per_second: 200    # 每秒最大封禁添加次数（泛洪保护）

@@ -126,6 +126,10 @@ type DdosConfig struct {
 	DynamicThreshold bool
 	DdosDetection    bool
 
+	// DynamicThresholdRatioX100 是动态阈值倍数（×100），仅在 DynamicThreshold
+	// 开启且下发内核时使用。默认 300 与内核 DEFAULT_DYNAMIC_THRESHOLD_RATIO_X100 一致。
+	DynamicThresholdRatioX100 uint32
+
 	MaxBansPerSecond uint32
 	MaxRateEntries   uint32
 
@@ -137,24 +141,25 @@ type DdosConfig struct {
 // DefaultDdosConfig 返回 DDoS 配置默认值。
 func DefaultDdosConfig() DdosConfig {
 	return DdosConfig{
-		Enabled:              true,
-		GlobalConnRate:       100000,
-		AutoBanDuration:      3600,
-		AutoBanThreshold:     3,
-		CheckInterval:        5,
-		BaselineWarmupSample: 50,
-		MaxSynPerSecond:      2000,
-		MaxUDPPerSecond:      10000,
-		MaxICMPPerSecond:     500,
-		MaxACKPerSecond:      20000,
-		MaxRSTPerSecond:      2000,
-		MaxFINPerSecond:      2000,
-		StaticThreshold:      true,
-		DynamicThreshold:     false,
-		DdosDetection:        true,
-		MaxBansPerSecond:     200,
-		MaxRateEntries:       65536,
-		ProtectOpenPorts:     true,
+		Enabled:                   true,
+		GlobalConnRate:            100000,
+		AutoBanDuration:           3600,
+		AutoBanThreshold:          3,
+		CheckInterval:             5,
+		BaselineWarmupSample:      50,
+		MaxSynPerSecond:           2000,
+		MaxUDPPerSecond:           10000,
+		MaxICMPPerSecond:          500,
+		MaxACKPerSecond:           20000,
+		MaxRSTPerSecond:           2000,
+		MaxFINPerSecond:           2000,
+		StaticThreshold:           true,
+		DynamicThreshold:          false,
+		DdosDetection:             true,
+		DynamicThresholdRatioX100: 300,
+		MaxBansPerSecond:          200,
+		MaxRateEntries:            65536,
+		ProtectOpenPorts:          true,
 	}
 }
 
@@ -397,6 +402,11 @@ type Config struct {
 	ServerCoordsSet     bool
 	GeoipDetectEgress   bool
 	GeoipEgressProbeURL string
+
+	// ServerCoordsSource 是本机坐标的来源（"config" / "detected" / "none"）。
+	// 不是 YAML 键：由组合根在启动时按 ServerCoordsSet 与出口探测结果填写，
+	// 供 /api/v2/stats/attack-geo 如实标注坐标从哪来。
+	ServerCoordsSource string
 
 	// HTTP 面的监听地址不是独立配置项，而是由 metrics_bind_address + metrics_port
 	// 现场合成，见 ListenAddress。

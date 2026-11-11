@@ -110,10 +110,16 @@ const (
 	ConfigFlagDynamicThreshold ConfigFlags = 1 << 10
 	ConfigFlagBaselineUpdate   ConfigFlags = 1 << 11
 	ConfigFlagDdosBanDuration  ConfigFlags = 1 << 12
+	ConfigFlagThresholdToggles ConfigFlags = 1 << 13
 )
 
-// DynThresholdFlagEnabled 是 dynamic_threshold_flags 字段的启用位。
-const DynThresholdFlagEnabled uint32 = 1 << 0
+// DynThresholdFlag* 是 dynamic_threshold_flags 字段的位；THRESHOLD_TOGGLES
+// 位存在时三个开关一并生效。
+const (
+	DynThresholdFlagEnabled       uint32 = 1 << 0
+	DynThresholdFlagStatic        uint32 = 1 << 1
+	DynThresholdFlagDdosDetection uint32 = 1 << 2
+)
 
 // Addr16 是契约里的 addr16：IPv4 占前 4 字节、余下为 0；IPv6 用全部 16 字节。
 type Addr16 [Addr16Len]byte

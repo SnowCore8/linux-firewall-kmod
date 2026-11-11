@@ -114,7 +114,7 @@ if (unlikely(fw_is_shutting_down())) {
 if (!fw_wl_lookup(af, src) && !fw_local_lookup(af, src)) {
   if (fw_ban_lookup(af, src)) {
     banned = true;
-  } else if (likely(READ_ONCE(fw_ddos_detection)) && fw_ports_observe(dst_port)) {
+  } else if (likely(READ_ONCE(fw_info.ddos_detection_enabled)) && fw_ports_observe(dst_port)) {
     reason = fw_rate_observe(af, src, packet_len, protocol, tcp_flags, dst_port, &pps);
   }
 }
@@ -592,12 +592,16 @@ graph TB
 | `fw_max_ban_entries` | 65535 | 0644 | 封禁表条目上限，到限拒绝并计 `ban_table_full_rejects` |
 | `fw_max_whitelist_entries` | 65535 | 0644 | 白名单条目上限 |
 | `fw_max_local_ips` | 256 | 0644 | 本机地址集合容量**下界**；实际更多时按需扩容 |
-| `fw_static_threshold` | 1 | 0644 | 启用静态阈值检测 |
-| `fw_dynamic_threshold` | 0 | 0644 | 启用动态阈值检测；实际阈值 = max(静态, 基线 × 倍数) |
-| `fw_ddos_detection` | 1 | 0644 | DDoS 检测总开关；关闭后跳过所有速率检测与自决封禁 |
+| `fw_static_threshold` | 1 | 0644 | 静态阈值检测初值 |
+| `fw_dynamic_threshold` | 0 | 0644 | 动态阈值检测初值；实际阈值 = max(静态, 基线 × 倍数) |
+| `fw_ddos_detection` | 1 | 0644 | DDoS 检测总开关初值；关闭后跳过所有速率检测与自决封禁 |
 
 `fw_params_validate()` 拒绝 `fw_ban_time` 越界与任一容量参数为 0，返回 `-EINVAL`
 中止加载，不带着坏配置运行。
+
+这三个检测开关的**运行期**取值由守护进程通过 `SET_CONFIG` 的 `threshold_toggles`
+位改写（`fw_info.static_threshold_enabled` / `dynamic_threshold_enabled` /
+`ddos_detection_enabled`），配置热重载即生效；模块参数只决定加载时的初值。
 
 ## 编译期自检
 

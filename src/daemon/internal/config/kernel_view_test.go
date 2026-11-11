@@ -6,7 +6,7 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
 )
 
-// TestKernelConfigChangeProjectsDefaultConfig 是投影表的主干：默认配置投出十个位、
+// TestKernelConfigChangeProjectsDefaultConfig 是投影表的主干：默认配置投出十一个位、
 // 每个位带上对应配置项的值。
 func TestKernelConfigChangeProjectsDefaultConfig(t *testing.T) {
 	cfg := Default()
@@ -15,7 +15,7 @@ func TestKernelConfigChangeProjectsDefaultConfig(t *testing.T) {
 	want := contract.ConfigFlagBanTime | contract.ConfigFlagRateWindow | contract.ConfigFlagMaxPPS |
 		contract.ConfigFlagMaxSYN | contract.ConfigFlagMaxUDP | contract.ConfigFlagMaxICMP |
 		contract.ConfigFlagMaxACK | contract.ConfigFlagMaxRST | contract.ConfigFlagMaxFIN |
-		contract.ConfigFlagDdosBanDuration
+		contract.ConfigFlagDdosBanDuration | contract.ConfigFlagThresholdToggles
 	if change.Flags != want {
 		t.Errorf("Flags = %s，期望 %s", change.Flags, want)
 	}
@@ -107,8 +107,38 @@ func TestKernelConfigChangeNeverCarriesBitsWithoutSource(t *testing.T) {
 			t.Errorf("投影带上了 %s（理由见 KernelConfigChange 的注释）", bit.Names())
 		}
 	}
-	if change.MaxBytesPerSecond != 0 || change.BaselinePPS != 0 || change.BaselineBPS != 0 ||
-		change.DynamicThresholdFlags != 0 || change.DynamicThresholdRatioX100 != 0 {
+	if change.MaxBytesPerSecond != 0 || change.BaselinePPS != 0 || change.BaselineBPS != 0 {
 		t.Errorf("缺席的位在载荷里也必须是零值，实际 %+v", change.ConfigPayload)
+	}
+}
+
+// TestKernelConfigChangeProjectsToggles 盯住 THRESHOLD_TOGGLES 位：
+// 三个检测开关各自映射到 DynThresholdFlags 的子位，ddos.enabled 与 ddos_detection
+// 任一为假都关闭内核检测。
+func TestKernelConfigChangeProjectsToggles(t *testing.T) {
+	cfg := Default()
+	cfg.Ddos.StaticThreshold = true
+	cfg.Ddos.DynamicThreshold = false
+	cfg.Ddos.DdosDetection = true
+	cfg.Ddos.Enabled = true
+	cfg.Ddos.DynamicThresholdRatioX100 = 300
+	if got := cfg.KernelConfigChange(); got.DynamicThresholdFlags !=
+		contract.DynThresholdFlagStatic|contract.DynThresholdFlagDdosDetection {
+		t.Errorf("toggles = %d，期望 static|ddos_detection", got.DynamicThresholdFlags)
+	}
+
+	cfg.Ddos.Enabled = false
+	if got := cfg.KernelConfigChange(); got.DynamicThresholdFlags&contract.DynThresholdFlagDdosDetection != 0 {
+		t.Error("ddos.enabled = false 时仍带 ddos_detection 子位（总开关必须能关掉检测）")
+	}
+
+	cfg.Ddos.Enabled = true
+	cfg.Ddos.DynamicThreshold = true
+	got := cfg.KernelConfigChange()
+	if got.DynamicThresholdFlags&contract.DynThresholdFlagEnabled == 0 {
+		t.Error("dynamic_threshold = true 但未带 ENABLED 子位")
+	}
+	if got.DynamicThresholdRatioX100 != 300 {
+		t.Errorf("ratio = %d，期望配置里的 300", got.DynamicThresholdRatioX100)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/geoip"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/telemetry"
@@ -75,6 +76,10 @@ type APIConfig struct {
 	// ThreatFeeds 是威胁情报源管理器（/api/v2/threat-feeds*）。可空：情报系统未启用
 	// 或装配失败时为 nil，三个 handler 按「服务不可用」应答，与其余可空依赖同一口径。
 	ThreatFeeds *threatfeeds.FeedManager
+
+	// GeoIP 是攻击源定位用的 mmdb 读取器。可空：未配置 geoip_db_path 或库打不开时
+	// AttackGeo 回 geoip_enabled=false、points 空，本机坐标仍照实返回。
+	GeoIP *geoip.Reader
 }
 
 func (s *Server) RegisterRoutes(api *APIHandlers) {
@@ -244,6 +249,7 @@ type APIHandlers struct {
 	kernelConfig    KernelConfig
 	lockout         *AuthLockout
 	threatFeeds     *threatfeeds.FeedManager
+	geoIP           *geoip.Reader
 	threatFeedSync  sync.Mutex
 	configFileMu    sync.Mutex // 保护配置文件读写，防止并发更新丢失
 
@@ -300,6 +306,7 @@ func NewAPIHandlers(cfg APIConfig) *APIHandlers {
 		getRateSamples:    cfg.GetRateSamples,
 		kernelVersion:     cfg.KernelVersion,
 		threatFeeds:       cfg.ThreatFeeds,
+		geoIP:             cfg.GeoIP,
 	}
 }
 

@@ -9,8 +9,8 @@
     "enum BanAction: 2 个成员，宽度 u8",
     "enum WhitelistAction: 2 个成员，宽度 u8",
     "enum MsgType: 24 个成员，宽度 u16",
-    "bits ConfigFlags: 13 个标志，宽度 u32",
-    "bits DynThresholdFlags: 1 个标志，宽度 u32",
+    "bits ConfigFlags: 14 个标志，宽度 u32",
+    "bits DynThresholdFlags: 3 个标志，宽度 u32",
     "公共头 MsgHdr: 12 字节",
     "message DdosEvent: 定长 65 字节",
     "message BanStateChange: 定长 123 字节",
@@ -114,13 +114,16 @@
         "MAX_FIN": 9,
         "DYNAMIC_THRESHOLD": 10,
         "BASELINE_UPDATE": 11,
-        "DDOS_BAN_DURATION": 12
+        "DDOS_BAN_DURATION": 12,
+        "THRESHOLD_TOGGLES": 13
       }
     },
     "DynThresholdFlags": {
       "width": "u32",
       "members": {
-        "ENABLED": 0
+        "ENABLED": 0,
+        "STATIC": 1,
+        "DDOS_DETECTION": 2
       }
     }
   },

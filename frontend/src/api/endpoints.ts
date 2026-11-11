@@ -401,7 +401,7 @@ export function getAnomalies(signal?: AbortSignal): Promise<AnomalyResponse> {
   return apiFetch<AnomalyResponse>(ROUTES.GET_API_V2_STATS_ANOMALIES, { signal })
 }
 
-/** GET /api/v2/stats/attack-geo：攻击源地理分布（当前无 GeoIP，points 恒空）。 */
+/** GET /api/v2/stats/attack-geo：攻击源地理分布（GeoIP 库未配置时 points 为空）。 */
 export function getAttackGeo(signal?: AbortSignal): Promise<AttackGeoResponse> {
   return apiFetch<AttackGeoResponse>(ROUTES.GET_API_V2_STATS_ATTACK_GEO, { signal })
 }

@@ -52,6 +52,10 @@ type FactsOptions struct {
 	// RiskEngineEnabled 启用多维风险向量记录（feature flag）。
 	// 为 false 时不构建风险引擎，阈值计算不受影响。
 	RiskEngineEnabled bool
+	// RiskWeights 覆盖各维度默认权重；零值或未给出的维度保持 1.0。
+	RiskWeights map[string]float64
+	// RiskHalfLifeDays 是向量衰减半衰期（天），<=0 用默认 7 天。
+	RiskHalfLifeDays float64
 }
 
 // factsEntry 是一个 IP 的缓存项。
@@ -122,7 +126,20 @@ func NewFacts(db *DB, opts FactsOptions) *Facts {
 
 	var riskEngine *risk.Engine
 	if opts.RiskEngineEnabled {
-		riskEngine = risk.NewEngine(risk.DefaultDimensionWeights())
+		weights := risk.DefaultDimensionWeights()
+		setWeight := func(name string, dst *float64) {
+			if v, ok := opts.RiskWeights[name]; ok && v > 0 {
+				*dst = v
+			}
+		}
+		setWeight("failure", &weights.Failure)
+		setWeight("ban", &weights.Ban)
+		setWeight("scan", &weights.Scan)
+		setWeight("bruteforce", &weights.Bruteforce)
+		setWeight("ddos", &weights.DDoS)
+		setWeight("geo", &weights.Geo)
+		setWeight("cluster", &weights.Cluster)
+		riskEngine = risk.NewEngineWithHalfLife(weights, opts.RiskHalfLifeDays)
 		logger.Info("multi-dimensional risk engine enabled")
 	}
 
@@ -161,6 +178,13 @@ func (f *Facts) eventWorker() {
 	for ev := range f.eventCh {
 		if err := f.db.InsertEvent(ev.ip, ev.eventType, ev.increment, 0); err != nil {
 			f.logger.Warn("risk event persist failed", "ip", ev.ip, "error", err)
+		}
+		// 向量快照与事件同批落库：查询接口读的是 ip_risk_vectors，只写事件表
+		// 会让 API 永远回零向量。
+		if vec, ok := f.riskEngine.GetVector(ev.ip); ok {
+			if err := f.db.UpsertRiskVector(ev.ip, vec, time.Now().Unix()); err != nil {
+				f.logger.Warn("risk vector persist failed", "ip", ev.ip, "error", err)
+			}
 		}
 	}
 }
@@ -345,6 +369,8 @@ func (f *Facts) NoteBan(addr netip.Addr) {
 	if evicted != nil && evicted.pending > 0 {
 		f.writeBack(evicted)
 	}
+	// 封禁也是风险维度之一；引擎未启用时 RecordRiskEvent 是空操作。
+	f.RecordRiskEvent(addr, risk.EventBan, 1.0)
 }
 
 // Flush 把所有脏账落盘，返回最后一个失败（其余失败逐条记日志，不让一次 IO 抖动挡住关停）。
