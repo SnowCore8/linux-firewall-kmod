@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
@@ -94,23 +95,18 @@ func (h *APIHandlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, fileBacked := applyWebuiUpdate(cfg.Webui, &req)
-	if err := validateWebui(updated); err != nil {
-		WriteCode(w, httpcontract.Code40004, "更新配置失败："+err.Error())
+	// 只判断「有没有字段要落盘」：底值用零值，不读共享的 cfg.Webui——并发的另一个 PUT
+	// 可能正在锁内改写它，锁外读就是数据竞争。
+	if _, fileBacked := applyWebuiUpdate(config.WebuiConfig{}, &req); !fileBacked {
+		// 空 body（什么都没提交）既不改文件也不下发，只回当前快照。
+		WriteSuccess(w, webuiConfigResponse(cfg.Webui))
 		return
 	}
-	// 提交了任一字段就走写盘 + 下发路径；空 body（什么都没提交）时 fileBacked 为假，既不改
-	// 文件也不下发，只回当前快照。写盘路径在文件写成功的那一刻把内存对齐（在 persistWebui
-	// 内完成），所以下面统一拿 cfg.Webui 组响应。
-	if fileBacked {
-		// 写盘成功即内存对齐（在 persistWebui 内完成）；它按失败种类写好响应并回 false 时，
-		// 内存与文件都保持原样，这里只负责不再往下走。
-		if !h.persistWebui(w, cfg, updated) {
-			return
-		}
-	} else {
-		cfg.Webui = updated
-		syncDdosToggles(cfg, updated)
+	// 合并与校验都必须在 configFileMu 内按**当时的** cfg.Webui 重算：两个并发 PUT 各自
+	// 用请求开始时的旧值做局部更新，后写的那个会把先写的字段覆盖回旧值（锁只保护文件
+	// 读写、保护不了锁外算出的 updated）。
+	if !h.persistWebui(w, cfg, &req) {
+		return
 	}
 
 	WriteSuccess(w, webuiConfigResponse(cfg.Webui))
@@ -125,7 +121,7 @@ func (h *APIHandlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 // 内存对齐的时点：**文件写成功之后、下发内核之前**就把 cfg.Webui 置成新值。这样内核下发
 // 失败（回 50003，属「文件对了、通道没通」）时内存已跟文件一致，GET /config 不会在下次热重载
 // 前一直回旧值；而读文件/合并/复核/写文件任一失败时都还没动内存、文件也没改，两者仍然一致。
-func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, updated config.WebuiConfig) bool {
+func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, req *UpdateConfigRequest) bool {
 	if h.getConfigPath == nil || h.getConfigPath() == "" {
 		WriteServiceUnavailable(w, "配置文件路径不可用")
 		return false
@@ -135,6 +131,13 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, up
 	// 持锁保护读-改-写序列，防止并发请求互相覆盖
 	h.configFileMu.Lock()
 	defer h.configFileMu.Unlock()
+
+	// 局部更新以锁内的现值为底：锁外的旧值在并发请求下会丢掉另一个请求刚写的字段。
+	updated, _ := applyWebuiUpdate(cfg.Webui, req)
+	if err := validateWebui(updated); err != nil {
+		WriteCode(w, httpcontract.Code40004, "更新配置失败："+err.Error())
+		return false
+	}
 
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -161,7 +164,7 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, up
 		h.server.logger.Warn("配置正则未能编译，该 jail 退化为其关键字回退", "detail", warning)
 	}
 
-	if err := os.WriteFile(path, []byte(merged), 0o600); err != nil {
+	if err := writeFileAtomic(path, []byte(merged)); err != nil {
 		h.server.logger.Error("写入配置文件失败", "path", path, "error", err)
 		WriteCode(w, httpcontract.Code40004, "更新配置失败：写入配置文件失败")
 		return false
@@ -189,6 +192,47 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, up
 		}
 	}
 	return true
+}
+
+// writeFileAtomic 用「同目录临时文件 + rename」替换配置文件。
+//
+// 直接 WriteFile 会先截断再写：进程在两步之间被杀、或磁盘写满，留下的是半份 YAML，
+// 下一次启动/重载就再也起不来——而这份文件里还有运维的 jails 与凭据。rename 是原子的，
+// 读侧要么看到旧文件、要么看到完整的新文件。
+//
+// 权限沿用旧文件的 mode：历史部署里可能有 0640（组可读），静默改成 0600 会让依赖它的
+// 监控/备份脚本失效；文件不存在时按 0600（含凭据）。
+func writeFileAtomic(path string, data []byte) error {
+	mode := os.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.yaml")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	// rename 成功后临时文件已不存在，这里的 Remove 只清理失败路径。
+	defer os.Remove(tmpName)
+
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	// 先落盘再 rename：否则断电后可能留下一个「名字已换、内容还在页缓存」的空文件。
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // applyWebuiUpdate 把请求里**显式给出**的字段覆盖到现值上，返回新值与「是否有字段要落盘」。

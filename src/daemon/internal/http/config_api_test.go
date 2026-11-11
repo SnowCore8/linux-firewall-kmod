@@ -318,3 +318,58 @@ func TestGetConfigReturnsContractShapeWithoutLeakingCredentials(t *testing.T) {
 		t.Errorf("GET 改动了活配置的 MetricsPassword：%q", live.MetricsPassword)
 	}
 }
+
+// TestUpdateConfigPreservesFileModeAndLeavesNoTempFiles 定住落盘方式：同目录临时文件
+// 写完 rename 替换，权限沿用旧文件。直接截断写会在崩溃时留下半份 YAML；临时文件
+// 用默认 0600 则会把部署要求的 0640 悄悄改掉。
+func TestUpdateConfigPreservesFileModeAndLeavesNoTempFiles(t *testing.T) {
+	s, path, _, _ := configAPIFixture(t, nil)
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatalf("设置初始权限失败: %v", err)
+	}
+
+	env, status := putConfig(t, s, `{"rate_warning_pps":60000}`)
+	if status != http.StatusOK || envelopeCode(t, env) != httpcontract.CodeOK {
+		t.Fatalf("PUT /config status=%d code=%d", status, envelopeCode(t, env))
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("配置文件不存在: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o640 {
+		t.Errorf("文件权限 = %#o，期望沿用 0640", got)
+	}
+	temps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".config-*.yaml"))
+	if err != nil {
+		t.Fatalf("glob 临时文件失败: %v", err)
+	}
+	if len(temps) != 0 {
+		t.Errorf("rename 后残留临时文件: %v", temps)
+	}
+}
+
+// TestUpdateConfigEmptyBodyIsNoOp 定住空 body 的语义：没有字段要落盘，文件一个字节
+// 都不变，也不下发内核。
+func TestUpdateConfigEmptyBodyIsNoOp(t *testing.T) {
+	s, path, _, rec := configAPIFixture(t, nil)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取初始配置失败: %v", err)
+	}
+
+	env, status := putConfig(t, s, `{}`)
+	if status != http.StatusOK || envelopeCode(t, env) != httpcontract.CodeOK {
+		t.Fatalf("空 body PUT 应成功: status=%d code=%d", status, envelopeCode(t, env))
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取配置文件失败: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("空 body 改写了配置文件:\n前:\n%s\n后:\n%s", before, after)
+	}
+	if len(rec.changes) != 0 {
+		t.Errorf("空 body 下发了 %d 次内核配置", len(rec.changes))
+	}
+}
