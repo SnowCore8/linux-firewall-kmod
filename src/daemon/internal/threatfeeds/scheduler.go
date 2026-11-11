@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -13,12 +14,15 @@ import (
 // 设计目标：
 //   - 定时触发：按配置的间隔定期刷新
 //   - 抖动防惊群：添加随机抖动，避免多个实例同时拉取
-//   - 优雅停止：支持 context 取消和 Stop 信号
+//   - 优雅停止：支持 context 取消和 Stop 信号，Stop 等到调度循环退出
 type Scheduler struct {
 	interval time.Duration
 	jitter   time.Duration
 	stopCh   chan struct{}
-	once     sync.Once
+	doneCh   chan struct{} // Run 退出（含当前 fn 已返回）时关闭
+	once     sync.Once     // 关 stopCh
+	doneOnce sync.Once     // 关 doneCh
+	started  atomic.Bool   // 是否经 Start 启动过，决定 Stop 是否需要等 doneCh
 }
 
 // NewScheduler 创建新的调度器。
@@ -30,14 +34,28 @@ func NewScheduler(interval, jitter time.Duration) *Scheduler {
 		interval: interval,
 		jitter:   jitter,
 		stopCh:   make(chan struct{}),
+		doneCh:   make(chan struct{}),
 	}
+}
+
+// Start 在后台启动 Run，并标记调度器已启动，使 Stop() 能等到 Run 退出。
+//
+// 直接 go Run(...) 启动的调用方不经过这里：从未启动过的调度器上 Stop() 不能等
+// doneCh，否则永远不会有人关闭它。
+func (s *Scheduler) Start(ctx context.Context, fn func()) {
+	s.started.Store(true)
+	go s.Run(ctx, fn)
 }
 
 // Run 启动调度循环。
 //
 // 每次触发时调用 fn()。支持通过 context 或 Stop() 停止。
 // 抖动通过每次动态重建 timer 实现，避免与 ticker 双重触发。
+// 所有退出路径都会关闭 doneCh；fn 是同步调用的，因此 Run 退出即意味着当前这轮
+// fn 已经返回，不会留下在跑的刷新 goroutine。
 func (s *Scheduler) Run(ctx context.Context, fn func()) {
+	defer s.doneOnce.Do(func() { close(s.doneCh) })
+
 	// 已停止或已取消时不再执行首次触发：否则关停流程里还会再拉一轮情报。
 	select {
 	case <-s.stopCh:
@@ -76,11 +94,19 @@ func (s *Scheduler) Run(ctx context.Context, fn func()) {
 	}
 }
 
-// Stop 停止调度器。
+// Stop 停止调度器，等待调度循环退出。
+//
+// 幂等：重复调用关闭的是同一条 stopCh，doneCh 也只关一次，第二次直接返回。
+// 经 Start 启动过的调度器，Stop 返回时 Run 已经退出，当前这轮 fn 也已返回；
+// 未经 Start 启动（比如只构造未运行）时不等 doneCh，避免永远阻塞。
+// 若 fn 不响应 context 取消，Stop 会等它跑完——调用方负责让 fn 有界。
 func (s *Scheduler) Stop() {
 	s.once.Do(func() {
 		close(s.stopCh)
 	})
+	if s.started.Load() {
+		<-s.doneCh
+	}
 }
 
 // calculateJitter 计算抖动延迟。

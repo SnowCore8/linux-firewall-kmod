@@ -286,7 +286,7 @@ func (m *FeedManager) Lookup(ip netip.Addr) (*FeedEntry, bool) {
 
 // StartScheduler 启动定时调度器。
 func (m *FeedManager) StartScheduler() {
-	go m.scheduler.Run(m.ctx, func() {
+	m.scheduler.Start(m.ctx, func() {
 		if err := m.RefreshAll(m.ctx); err != nil {
 			slog.Warn("定时刷新情报失败", "error", err)
 		}
@@ -295,10 +295,23 @@ func (m *FeedManager) StartScheduler() {
 	})
 }
 
-// Stop 停止调度器并清理资源。
+// Stop 停止调度器并清理资源。返回后不再有调度 goroutine 在跑。
+//
+// 顺序是先取消、再等待，两项都不能换：
+//   - 先 m.cancel()：在跑的 RefreshAll 用的是同一个 m.ctx（StartScheduler 传进 fn，
+//     http.go 的 fetchOnce 用它构造请求），取消会立刻中断 in-flight 请求和重试退避，
+//     Stop 不必等满一整轮网络拉取。反过来先等 Run 就只能在整轮拉取结束后才返回。
+//   - 再 scheduler.Stop()：它关闭停止信号并等 Run 退出，Run 只在当前这轮 fn
+//     （RefreshAll + 缓存清理）返回后才检查停止信号，因此 Stop 返回时刷新确实收尾，
+//     不会出现「管理器已停但仍在写缓存」的关停顺序错误，也不泄漏 goroutine。
+//
+// 等待上界：若 fn 不响应取消，Stop 仍会等它跑完；HTTP 客户端自带超时
+// （Config.HTTPTimeout 默认 30s，见 DefaultConfig），单轮最长约
+// (MaxRetries+1)*HTTPTimeout，不是无界等待。
+// 重复调用安全：cancel 与 scheduler.Stop 都是幂等的。
 func (m *FeedManager) Stop() {
-	m.scheduler.Stop()
 	m.cancel()
+	m.scheduler.Stop()
 }
 
 // Stats 返回所有源的统计信息。
