@@ -31,6 +31,12 @@
 
 #include "fw_types.h"
 
+/*
+ * 模块加载时调用：探测 /bin/mv 与 /bin/rm 是否存在，缺失则 pr_warn。
+ * 始终返回 0（不阻止加载）。
+ */
+int fw_state_init(void);
+
 /* 把当前封禁表与白名单写入 fw_state_file（内部读取该全局参数） */
 int fw_state_save(void);
 

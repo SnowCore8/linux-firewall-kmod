@@ -32,6 +32,7 @@
 
 #include <linux/crc32.h>
 #include <linux/errno.h>
+#include <linux/fcntl.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/kmod.h>
@@ -177,6 +178,32 @@ static void fw_state_unlink(const char *path) {
   char *envp[] = { "HOME=/", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", NULL };
 
   (void)call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+}
+
+/*
+ * 状态持久化依赖 /bin/mv 与 /bin/rm（call_usermodehelper 路径）。最小化环境
+ * （BusyBox 只装到 /usr/bin、嵌入式 initramfs 缺 bin 目录）可能缺失。模块加载
+ * 时探测一次，缺失则告警——保存/恢复会在运行期失败，但不阻止加载：首次启动
+ * 没有状态文件属正常路径，缺失工具只影响后续保存。
+ */
+int fw_state_init(void) {
+  struct file *f;
+
+  f = filp_open("/bin/mv", O_PATH | O_LARGEFILE, 0);
+  if (IS_ERR(f)) {
+    pr_warn("状态持久化: /bin/mv 不存在，状态保存将失败\n");
+  } else {
+    filp_close(f, NULL);
+  }
+
+  f = filp_open("/bin/rm", O_PATH | O_LARGEFILE, 0);
+  if (IS_ERR(f)) {
+    pr_warn("状态持久化: /bin/rm 不存在，状态保存/清理将失败\n");
+  } else {
+    filp_close(f, NULL);
+  }
+
+  return 0;
 }
 
 /* ============================================================================

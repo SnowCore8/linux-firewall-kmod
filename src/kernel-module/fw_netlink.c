@@ -1018,6 +1018,13 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
         pr_warn_ratelimited("netlink: BAN/UNBAN 载荷过短 %zu\n", payload);
         break;
       }
+      /*
+       * 批处理竞态：外层 while 循环顶部的 shutting_down 检查只在第一条消息前
+       * 做一次；fw_exit() 可能在处理前一条消息期间完成清表，此时 ban/wl/rate
+       * 表已销毁，继续调用会 UAF。修改操作前再检一次。
+       */
+      if (fw_is_shutting_down())
+        break;
       c = (const struct fw_ban_ip *)h;
       fw_nl_handle_ban(portid, type, c->af, c->prefix_len, c->addr,
                        be32_to_cpu(c->duration_secs), (const char *)c->reason);
@@ -1032,6 +1039,8 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
         pr_warn_ratelimited("netlink: 白名单载荷过短 %zu\n", payload);
         break;
       }
+      if (fw_is_shutting_down())
+        break;
       c = (const struct fw_add_whitelist *)h;
       fw_nl_handle_whitelist(
         portid, type, c->af, c->addr, c->prefix_len, (const char *)c->device);
@@ -1045,6 +1054,8 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
         pr_warn_ratelimited("netlink: SET_CONFIG 载荷过短 %zu\n", payload);
         break;
       }
+      if (fw_is_shutting_down())
+        break;
       c = (const struct fw_set_config *)h;
       {
         u32 requested = be32_to_cpu(c->flags);
@@ -1106,6 +1117,8 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
         pr_warn_ratelimited("netlink: SET_PROTECTED_PORTS 载荷过短 %zu\n", payload);
         break;
       }
+      if (fw_is_shutting_down())
+        break;
       c = (const struct fw_set_protected_ports *)h;
       rc = fw_ports_replace(c->bitmap);
       if (rc)

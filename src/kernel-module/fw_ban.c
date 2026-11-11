@@ -486,22 +486,15 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len, u32 duration_se
 
   if (existing) {
     /*
-     * 过期未摘链：按本次请求续期，重武装定时器（只武装到下一个可表示的一跳，
-     * 未到绝对到期时刻时由回调继续分段）。
-     * 该节点已在链表上发布，读侧（分页遍历、到期回调）可能同时在读，
-     * 故这几个标量一律 WRITE_ONCE，读侧对应 READ_ONCE。
+     * 过期未摘链：若直接走新插入路径而不删除旧节点，同一 (af, addr, prefix_len)
+     * 在哈希桶中会有两个节点，ban_count 被多加 1，导致计数膨胀。必须先完整
+     * 删除旧节点（停定时器、摘链、减计数、RCU 释放），再插入新节点。
      */
-    WRITE_ONCE(existing->duration_secs, duration_secs);
-    WRITE_ONCE(existing->is_permanent, duration_secs == 0);
-    WRITE_ONCE(existing->banned_at, n->banned_at);
-    WRITE_ONCE(existing->unban_jiffies, n->unban_jiffies);
-    if (duration_secs)
-      mod_timer(&existing->expire_timer, fw_ban_timer_deadline((u64)n->unban_jiffies));
-    else
-      timer_delete(&existing->expire_timer);
-    spin_unlock_bh(&layer->locks[bkt]);
-    kfree(n);
-    return 0;
+    timer_delete(&existing->expire_timer);
+    hlist_del_init_rcu(&existing->hash);
+    atomic_dec(&fw_info.ban_count);
+    call_rcu(&existing->rcu, fw_ban_free_rcu);
+    /* 旧节点已摘链，继续走下方的新插入路径 */
   }
 
   /*

@@ -666,9 +666,6 @@ func run(args []string) error {
 	}
 	executor, err := runtime.NewInboundExecutor(&cfg, signals, deps)
 	if err != nil {
-		if transport != nil {
-			transport.Close()
-		}
 		return fmt.Errorf("装配入站主链路失败: %w", err)
 	}
 

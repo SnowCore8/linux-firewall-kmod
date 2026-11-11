@@ -162,6 +162,11 @@ func (m *FeedManager) RefreshAll(ctx context.Context) error {
 		return nil
 	}
 
+	// 派生子上下文：RefreshAll 返回时取消所有 worker 的 HTTP 请求，
+	// 避免调用方提前退出时 worker 因网络超时仍阻塞在 fetch 上导致 goroutine 泄漏。
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	defer cancelWorkers()
+
 	// 清除已过冷却期的熔断状态，使持续失败的源可重新触发熔断
 	m.mu.Lock()
 	m.resetExpiredCircuitBreakers()
@@ -185,7 +190,7 @@ func (m *FeedManager) RefreshAll(ctx context.Context) error {
 		wg.Add(1)
 		go func(s FeedSource) {
 			defer wg.Done()
-			result := m.refreshOne(ctx, s)
+			result := m.refreshOne(workerCtx, s)
 			results <- result
 		}(src)
 	}

@@ -137,6 +137,10 @@ type riskEvent struct {
 	ip        string
 	eventType risk.EventType
 	increment float64
+	// vector 是事件入队时捕获的向量快照，避免 InsertEvent（可能慢）与 GetVector
+	// 之间向量因衰减而变化，导致持久化的向量与事件不匹配。
+	vector    risk.RiskVector
+	hasVector bool
 }
 
 // NewFacts 装配缓存。db 为 nil 时退化为纯内存实现（不落盘，读侧永远满分起算）。
@@ -236,10 +240,10 @@ func (f *Facts) eventWorker() {
 		if err := f.db.InsertEvent(ev.ip, ev.eventType, ev.increment, 0); err != nil {
 			f.logger.Warn("risk event persist failed", "ip", ev.ip, "error", err)
 		}
-		// 向量快照与事件同批落库：查询接口读的是 ip_risk_vectors，只写事件表
-		// 会让 API 永远回零向量。
-		if vec, ok := f.riskEngine.GetVector(ev.ip); ok {
-			if err := f.db.UpsertRiskVector(ev.ip, vec, time.Now().Unix()); err != nil {
+		// 向量快照在事件入队时已捕获（见 riskEvent.vector），直接持久化。
+		// 不再调用 GetVector，避免 InsertEvent（可能慢）与 GetVector 之间向量因衰减而变化。
+		if ev.hasVector {
+			if err := f.db.UpsertRiskVector(ev.ip, ev.vector, time.Now().Unix()); err != nil {
 				f.logger.Warn("risk vector persist failed", "ip", ev.ip, "error", err)
 			}
 		}
@@ -397,9 +401,18 @@ func (f *Facts) RecordFailure(addr netip.Addr) {
 	if f.riskEngine != nil && !f.stopped {
 		ip := key(addr)
 		f.riskEngine.RecordEvent(ip, risk.EventFailure, 1.0)
+		// 在事件入队时立即捕获向量快照，避免 InsertEvent（可能慢）与 GetVector
+		// 之间向量因衰减而变化，导致持久化的向量与事件不匹配。
+		vec, hasVec := f.riskEngine.GetVector(ip)
 		// 异步持久化到数据库（不阻塞主链路）
 		// 使用有界 channel 而非无界 goroutine，防止高流量下内存耗尽
-		drops, dropIP, warnDrop = f.enqueueRiskLocked(riskEvent{ip: ip, eventType: risk.EventFailure, increment: 1.0})
+		drops, dropIP, warnDrop = f.enqueueRiskLocked(riskEvent{
+			ip:        ip,
+			eventType: risk.EventFailure,
+			increment: 1.0,
+			vector:    vec,
+			hasVector: hasVec,
+		})
 	}
 	f.mu.Unlock()
 	// 日志在锁外写：告警要落到文件，持缓存锁做 I/O 会钉住所有判定。
@@ -447,6 +460,8 @@ func (f *Facts) RecordRiskEvent(addr netip.Addr, eventType risk.EventType, incre
 	}
 	ip := key(addr)
 	f.riskEngine.RecordEvent(ip, eventType, increment)
+	// 在事件入队时立即捕获向量快照（理由同 RecordFailure）。
+	vec, hasVec := f.riskEngine.GetVector(ip)
 	// 发送与 Stop 的关闭共用 f.mu：否则 Stop 关掉 channel 后仍可能有一条事件发进来。
 	f.mu.Lock()
 	if f.stopped {
@@ -454,7 +469,13 @@ func (f *Facts) RecordRiskEvent(addr netip.Addr, eventType risk.EventType, incre
 		return
 	}
 	// 异步持久化，使用有界 channel 防止高流量下内存耗尽
-	drops, dropIP, warnDrop := f.enqueueRiskLocked(riskEvent{ip: ip, eventType: eventType, increment: increment})
+	drops, dropIP, warnDrop := f.enqueueRiskLocked(riskEvent{
+		ip:        ip,
+		eventType: eventType,
+		increment: increment,
+		vector:    vec,
+		hasVector: hasVec,
+	})
 	f.mu.Unlock()
 	if warnDrop {
 		f.warnEventDrop(dropIP, drops)
