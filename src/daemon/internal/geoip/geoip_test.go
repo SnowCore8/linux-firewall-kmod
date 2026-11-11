@@ -31,6 +31,27 @@ func mmdbNodeBytes(recordSize int, left, right uint32) []byte {
 	}
 }
 
+// TestReadRecord28BitLayout 核对 28 位记录的位布局：左记录的高 4 位是第 4 字节的
+// 高半字节、低 24 位是前 3 字节；右记录的高 4 位是第 4 字节的低半字节、低 24 位是后 3 字节。
+func TestReadRecord28BitLayout(t *testing.T) {
+	b := []byte{0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE}
+
+	left, err := readRecord(b, 0, 28, false)
+	if err != nil {
+		t.Fatalf("read left: %v", err)
+	}
+	if left != 0x7123456 {
+		t.Errorf("left = %#x，期望 0x7123456", left)
+	}
+	right, err := readRecord(b, 0, 28, true)
+	if err != nil {
+		t.Fatalf("read right: %v", err)
+	}
+	if right != 0x89ABCDE {
+		t.Errorf("right = %#x，期望 0x89ABCDE", right)
+	}
+}
+
 // cityRecord 返回一个 City 数据记录（数据段首字节留 1 字节偏移 0 的填充）。
 func cityRecord() []byte {
 	return append([]byte{0x00}, encMap(
@@ -51,12 +72,13 @@ func cityRecord() []byte {
 	)...)
 }
 
-// buildMMDB 组装一个最小 MMDB：搜索树 + 数据段 + 元数据。
+// buildMMDB 组装一个最小 MMDB：搜索树 + 16 字节分隔区 + 数据段 + 元数据。
 func buildMMDB(recordSize, ipVersion int, nodes [][2]uint32, data []byte) []byte {
 	out := make([]byte, 0, 256+len(data))
 	for _, n := range nodes {
 		out = append(out, mmdbNodeBytes(recordSize, n[0], n[1])...)
 	}
+	out = append(out, make([]byte, dataSectionSeparatorSize)...)
 	out = append(out, data...)
 	out = append(out, []byte(metadataMarker)...)
 	out = append(out, encMap(
@@ -78,7 +100,8 @@ func writeTemp(t *testing.T, data []byte) string {
 
 // oneNodeDB：单节点，左右记录都指向数据段首条记录。
 func oneNodeDB(recordSize int) []byte {
-	dataRec := uint32(1 + 1) // node_count + 1（偏移 0 为填充字节）
+	// 记录值 = node_count + 相对搜索树末尾的偏移；偏移要跳过分隔区与偏移 0 的填充字节。
+	dataRec := uint32(1 + dataSectionSeparatorSize + 1)
 	return buildMMDB(recordSize, 4, [][2]uint32{{dataRec, dataRec}}, cityRecord())
 }
 
@@ -121,9 +144,9 @@ func recordSizeName(recordSize int) string {
 
 func TestLookupNotFoundAndUnsupported(t *testing.T) {
 	nodes := [][2]uint32{
-		{1, 4}, // 0
-		{2, 4}, // 1
-		{3, 4}, // 2：左子树为 not found
+		{1, 20}, // 0
+		{2, 20}, // 1
+		{3, 20}, // 2：左子树为 not found
 	}
 	r, err := Open(writeTemp(t, buildMMDB(24, 4, nodes, cityRecord())))
 	if err != nil {
@@ -164,9 +187,9 @@ func TestLookupNotFoundAndUnsupported(t *testing.T) {
 
 func TestLookupIPv6Database(t *testing.T) {
 	nodes := [][2]uint32{
-		{1, 4}, // 0
-		{2, 4}, // 1
-		{4, 4}, // 2：ipv4Start 落在这里
+		{1, 20},  // 0
+		{2, 20},  // 1
+		{20, 20}, // 2：ipv4Start 落在这里
 	}
 	r, err := Open(writeTemp(t, buildMMDB(24, 6, nodes, cityRecord())))
 	if err != nil {
@@ -202,7 +225,7 @@ func TestLookupPointerInsideRecord(t *testing.T) {
 	}
 	data := append(build(target), encString("Pointerville")...)
 
-	r, err := Open(writeTemp(t, buildMMDB(24, 4, [][2]uint32{{2, 2}}, data)))
+	r, err := Open(writeTemp(t, buildMMDB(24, 4, [][2]uint32{{18, 18}}, data)))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -256,7 +279,7 @@ func TestOpenRejectsInvalidInput(t *testing.T) {
 
 	valid := oneNodeDB(24)
 	// 元数据损坏：截断、record_size 非法、ip_version 非法。
-	badRS := buildMMDB(24, 4, [][2]uint32{{2, 2}}, cityRecord())
+	badRS := buildMMDB(24, 4, [][2]uint32{{18, 18}}, cityRecord())
 	badRS = replaceMeta(t, badRS, "record_size", encUint16(20))
 	if _, err := Open(writeTemp(t, badRS)); err == nil {
 		t.Fatal("expected error for unsupported record_size")

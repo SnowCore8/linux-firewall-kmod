@@ -30,11 +30,12 @@ var (
 )
 
 // decoder 在 buf 上从 pos 开始解码一个 MMDB 数据值。
-// 指针偏移相对 buf 起点（数据段起点）。
+// 指针目标 = 指针值 + pointerBase（相对 buf 起点的偏移）。
 type decoder struct {
-	buf   []byte
-	pos   int
-	depth int
+	buf         []byte
+	pos         int
+	depth       int
+	pointerBase int
 }
 
 func newDecoder(buf []byte) *decoder {
@@ -278,6 +279,11 @@ func (d *decoder) decodePointer(ctrl byte) (any, error) {
 	if off >= uint64(len(d.buf)) {
 		return nil, fmt.Errorf("geoip: pointer offset %d out of bounds", off)
 	}
-	sub := &decoder{buf: d.buf, pos: int(off), depth: d.depth + 1}
+	sub := &decoder{
+		buf:         d.buf,
+		pos:         int(off) + d.pointerBase,
+		depth:       d.depth + 1,
+		pointerBase: d.pointerBase,
+	}
 	return sub.decode()
 }

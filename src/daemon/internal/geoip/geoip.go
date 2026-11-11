@@ -21,6 +21,9 @@ const (
 	metadataMarker = "\xab\xcd\xefMaxMind.com"
 	// metadataSearchWindow 是查找标记时扫描的文件尾部范围。
 	metadataSearchWindow = 128 * 1024
+	// dataSectionSeparatorSize 是搜索树与数据段之间的 16 字节 0 分隔区。
+	// 树里数据记录的偏移相对分隔区之后的数据段起点，少跳过这 16 字节会整体错位。
+	dataSectionSeparatorSize = 16
 )
 
 // Location 是一次 City 级查询的结果。
@@ -99,7 +102,8 @@ func openBytes(data []byte) (*Reader, error) {
 	nodeCount := uint32(nodeCountRaw)
 	recordSize := int(recordSizeRaw)
 	treeSize64 := uint64(nodeCount) * uint64(recordSize) * 2 / 8
-	if treeSize64 > uint64(len(data)) || uint64(metaStart) < treeSize64 {
+	dataStart64 := treeSize64 + dataSectionSeparatorSize
+	if dataStart64 > uint64(len(data)) || uint64(metaStart) < dataStart64 {
 		return nil, errors.New("geoip: search tree exceeds file size")
 	}
 	treeSize := int(treeSize64)
@@ -217,9 +221,12 @@ func (r *Reader) search(start uint32, ip []byte) (Location, bool) {
 	return Location{}, false
 }
 
-// lookupDataRecord 解码偏移为 offset 的 data record。偏移相对数据段起点。
+// lookupDataRecord 解码偏移为 offset 的 data record。
+//
+// 记录起点相对搜索树末尾（treeSize + offset，可落在 16 字节分隔区内），
+// 而记录内部的指针相对分隔区之后的数据段起点，两者基准不同。
 func lookupDataRecord(data []byte, treeSize int, offset uint32) (Location, bool) {
-	if treeSize > len(data) {
+	if treeSize < 0 || treeSize > len(data) {
 		return Location{}, false
 	}
 	dataPos := int(offset)
@@ -227,6 +234,7 @@ func lookupDataRecord(data []byte, treeSize int, offset uint32) (Location, bool)
 		return Location{}, false
 	}
 	dec := newDecoder(data[treeSize:])
+	dec.pointerBase = dataSectionSeparatorSize
 	dec.pos = dataPos
 	raw, err := dec.decode()
 	if err != nil {
@@ -287,6 +295,7 @@ func readRecord(data []byte, node uint32, recordSize int, right bool) (uint32, e
 		if right {
 			return uint32(b[3]&0x0f)<<24 | uint32(b[4])<<16 | uint32(b[5])<<8 | uint32(b[6]), nil
 		}
+		// 左记录：第 4 字节高半字节是高 4 位，前 3 字节是低 24 位
 		return uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2]) | uint32(b[3]&0xf0)<<20, nil
 	default:
 		off := 0
