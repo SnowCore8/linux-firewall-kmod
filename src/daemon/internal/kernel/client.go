@@ -361,20 +361,37 @@ func (c *Client) ListWhitelistAll(timeout time.Duration) ([]contract.WhitelistEn
 		})
 }
 
-// ListRatesAll 取回速率表全部条目（自动续页），附带最后一页的全局速率。
+// ListRatesAll 取回速率表全部条目（自动续页），附带首页的全局速率。
 //
-// 全局 pps/bps 是「自上次查询以来的平均速率」，只取最后一次响应即可。
+// 内核在每次读表时用 fw_stats_take_traffic 清零并更新 last_jiffies，因此全局 pps/bps
+// 是「自上一次查询以来」的读数：续页时第二页起只剩极短的间隔，读数趋近 0。全局值只
+// 采信首页（offset==0）的响应，后续页不得覆盖。
 func (c *Client) ListRatesAll(timeout time.Duration) (RateSnapshot, error) {
 	var probe contract.ListRatesResponse
+	return listRatesAll(pageCap(probe.MaxTailEntries()),
+		func(offset, limit uint32) (contract.ListRatesResponse, error) {
+			return c.ListRatesPage(offset, limit, timeout)
+		})
+}
+
+// listRatesAll 是 ListRatesAll 的续页实现，取页函数由调用方注入以单测多页响应。
+//
+// 全局速率只在首页采信：首页即使返回空条目，它的 globals 也保留。
+func listRatesAll(
+	pageCap uint32,
+	fetch func(offset, limit uint32) (contract.ListRatesResponse, error),
+) (RateSnapshot, error) {
 	var globals RateSnapshot
-	entries, err := drain(pageCap(probe.MaxTailEntries()),
+	entries, err := drain(pageCap,
 		func(offset, limit uint32) (uint32, uint32, []contract.RateEntry, error) {
-			page, err := c.ListRatesPage(offset, limit, timeout)
+			page, err := fetch(offset, limit)
 			if err != nil {
 				return 0, 0, nil, err
 			}
-			globals.GlobalPPS = page.GlobalPPS
-			globals.GlobalBPS = page.GlobalBPS
+			if offset == 0 {
+				globals.GlobalPPS = page.GlobalPPS
+				globals.GlobalBPS = page.GlobalBPS
+			}
 			return page.Total, page.Offset, page.Entries, nil
 		})
 	if err != nil {

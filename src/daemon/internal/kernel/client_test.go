@@ -199,6 +199,65 @@ func TestPageCapsMatchTheContract(t *testing.T) {
 	}
 }
 
+// TestListRatesAllKeepsFirstPageGlobals 核对多页响应只采信首页的全局速率。
+//
+// 内核每页都用 fw_stats_take_traffic 清零并更新 last_jiffies，续页的 globals 只剩
+// 极短间隔、趋近 0；用它覆盖会把面板的全局速率长期压成 0。
+func TestListRatesAllKeepsFirstPageGlobals(t *testing.T) {
+	pages := []contract.ListRatesResponse{
+		{Total: 4, Offset: 0, GlobalPPS: 1200, GlobalBPS: 90000,
+			Entries: []contract.RateEntry{{}, {}}},
+		{Total: 4, Offset: 2, GlobalPPS: 0, GlobalBPS: 0,
+			Entries: []contract.RateEntry{{}, {}}},
+	}
+	calls := 0
+	snap, err := listRatesAll(2, func(offset, limit uint32) (contract.ListRatesResponse, error) {
+		if limit != 2 {
+			t.Fatalf("必须按调用方给的页上限请求，实得 %d", limit)
+		}
+		if calls >= len(pages) {
+			t.Fatalf("请求了第 %d 页，期望最多 %d 页", calls+1, len(pages))
+		}
+		page := pages[calls]
+		calls++
+		return page, nil
+	})
+	if err != nil {
+		t.Fatalf("续页失败：%v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("请求次数 %d，期望 2", calls)
+	}
+	if snap.GlobalPPS != 1200 || snap.GlobalBPS != 90000 {
+		t.Errorf("全局速率 = %d/%d，期望首页的 1200/90000", snap.GlobalPPS, snap.GlobalBPS)
+	}
+	if len(snap.Entries) != 4 {
+		t.Errorf("收集到 %d 条，期望 4 条", len(snap.Entries))
+	}
+}
+
+// TestListRatesAllKeepsGlobalsOfEmptyFirstPage 核对首页为空时仍保留它的 globals：
+// 空表时首页是唯一一次响应，丢掉它等于永远报 0 速率。
+func TestListRatesAllKeepsGlobalsOfEmptyFirstPage(t *testing.T) {
+	calls := 0
+	snap, err := listRatesAll(8, func(_, _ uint32) (contract.ListRatesResponse, error) {
+		calls++
+		return contract.ListRatesResponse{Total: 0, Offset: 0, GlobalPPS: 7, GlobalBPS: 11}, nil
+	})
+	if err != nil {
+		t.Fatalf("续页失败：%v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("请求次数 %d，期望 1（空表只问一次）", calls)
+	}
+	if snap.GlobalPPS != 7 || snap.GlobalBPS != 11 {
+		t.Errorf("全局速率 = %d/%d，期望首页的 7/11", snap.GlobalPPS, snap.GlobalBPS)
+	}
+	if len(snap.Entries) != 0 {
+		t.Errorf("空首页应得 0 条，实得 %d 条", len(snap.Entries))
+	}
+}
+
 // TestPageCapOfNegativeCapacityIsZero 覆盖防御性边界：负数容量不得转成巨大 u32。
 func TestPageCapOfNegativeCapacityIsZero(t *testing.T) {
 	if got := pageCap(-1); got != 0 {
