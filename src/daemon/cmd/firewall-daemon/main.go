@@ -53,6 +53,11 @@ const factoryDefaultUsername = "admin"
 // 回滚按进程名找，不读这个文件）。
 const daemonPIDFile = "/run/firewall-daemon.pid"
 
+// ingestExecutorName 是入站主链路在 Supervisor 里的登记名。
+//
+// 关停回报按这个名字判断执行体是否真的退出：没退出时不能释放它的 fd。
+const ingestExecutorName = "ingest"
+
 func main() {
 	if err := run(os.Args); err != nil {
 		fmt.Fprintf(os.Stderr, "firewall-daemon: %v\n", err)
@@ -666,11 +671,10 @@ func run(args []string) error {
 		}
 		return fmt.Errorf("装配入站主链路失败: %w", err)
 	}
-	defer executor.Close()
 
 	ingestToken := runtime.NewShutdown()
 	// 最后登记 = 最先关停：入站主链路先于内核接收回路收尾，避免收尾期间事件堆积。
-	sup.Spawn("ingest", ingestToken, func() {
+	sup.Spawn(ingestExecutorName, ingestToken, func() {
 		executor.Run(ingestToken, terminate)
 	})
 
@@ -693,10 +697,24 @@ func run(args []string) error {
 
 	// 关停顺序固定：先按登记逆序停掉各执行体（入站主链路 → 内核接收回路），再让
 	// 延迟清理释放执行体依赖的资源（延迟清理按 LIFO 执行）。
+	ingestJoined := false
 	for _, res := range sup.Shutdown(5 * time.Second) {
 		if res.Outcome != runtime.Joined {
 			logger.Warn("执行体关停未在超时内完成", "name", res.Name, "outcome", res.Outcome)
+			continue
 		}
+		if res.Name == ingestExecutorName {
+			ingestJoined = true
+		}
+	}
+
+	// 只有确认退出后才释放执行体的 fd：超时的那条 goroutine 可能仍阻塞在 poll/读取上，
+	// 而 watcher 与信号 fd 的访问没有同步，提前 Close 会与它并发（数据竞争 + 关闭后
+	// 复用的 fd）。进程随后退出，未释放的 fd 由内核回收。
+	if ingestJoined {
+		executor.Close()
+	} else {
+		logger.Warn("入站主链路未在超时内退出，跳过其 fd 释放")
 	}
 
 	// 链路断开是致命错误：清理完成后原样返回，main 以非零码退出，交给 systemd 重启。
@@ -892,31 +910,8 @@ func (s *banSink) InsertPending(info bans.BanInfo) bool {
 	if !s.cache.InsertPending(info, time.Now()) {
 		return false
 	}
-	if s.db != nil {
-		// 自动路径的等级取判定层的 info.BanCount（= 此前次数 + 1，渐进式时长就是按它算的），
-		// 底账里记同一个数，「这一级封多久」才对得上「这是第几封」。它与
-		// RecordBanHistory 返回的累计值是同一个数，这里不依赖后者是为了让写事件这一步
-		// 不被历史表的写入顺序牵着走。
-		if err := s.db.RecordBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent, info.PlannedDuration()); err != nil {
-			s.logger.Error("record ban event", "error", err)
-			if s.retryQueue != nil {
-				s.retryQueue.EnqueueBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent, info.PlannedDuration())
-			}
-		}
-		if _, err := s.db.RecordBanHistory(info.IP, info.IsPermanent); err != nil {
-			s.logger.Error("record ban history", "error", err)
-			if s.retryQueue != nil {
-				s.retryQueue.EnqueueBanHistory(info.IP, info.IsPermanent)
-			}
-		}
-		if err := s.db.RecordBan(info.IP, persist.DefaultBanPenalty); err != nil {
-			s.logger.Error("record ban reputation", "error", err)
-			if s.retryQueue != nil {
-				s.retryQueue.EnqueueBanReputation(info.IP, persist.DefaultBanPenalty)
-			}
-		}
-	}
-	// 库里的封禁次数与信誉分都被本方法改过了，判定层的缓存必须跟着走，否则它继续报告
+	s.recordBanLedger(info)
+	// 库里的封禁次数与信誉分都被本条底账改过了，判定层的缓存必须跟着走，否则它继续报告
 	// 封禁前的旧值（渐进式时长读的就是这个次数）。
 	if s.noteBan != nil {
 		if addr, err := netip.ParseAddr(info.IP); err == nil {
@@ -924,6 +919,47 @@ func (s *banSink) InsertPending(info bans.BanInfo) bool {
 		}
 	}
 	return true
+}
+
+// recordBanLedger 写一次封禁底账：事件 → 历史 → 信誉。DB 未装配时什么也不做。
+//
+// 自动单 IP 封禁与集群网段封禁共用这一处：两条路都算「封禁已发生」，底账口径必须一致，
+// 否则复发统计与分级成效在网段封禁上会凭空缺一段。写入失败交给重试队列暂存。
+func (s *banSink) recordBanLedger(info bans.BanInfo) {
+	if s.db == nil {
+		return
+	}
+	// 自动路径的等级取判定层的 info.BanCount（= 此前次数 + 1，渐进式时长就是按它算的），
+	// 底账里记同一个数，「这一级封多久」才对得上「这是第几封」。它与
+	// RecordBanHistory 返回的累计值是同一个数，这里不依赖后者是为了让写事件这一步
+	// 不被历史表的写入顺序牵着走。
+	if err := s.db.RecordBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent, info.PlannedDuration()); err != nil {
+		s.logger.Error("record ban event", "error", err)
+		if s.retryQueue != nil {
+			s.retryQueue.EnqueueBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent, info.PlannedDuration())
+		}
+	}
+	if _, err := s.db.RecordBanHistory(info.IP, info.IsPermanent); err != nil {
+		s.logger.Error("record ban history", "error", err)
+		if s.retryQueue != nil {
+			s.retryQueue.EnqueueBanHistory(info.IP, info.IsPermanent)
+		}
+	}
+	if err := s.db.RecordBan(info.IP, persist.DefaultBanPenalty); err != nil {
+		s.logger.Error("record ban reputation", "error", err)
+		if s.retryQueue != nil {
+			s.retryQueue.EnqueueBanReputation(info.IP, persist.DefaultBanPenalty)
+		}
+	}
+}
+
+// RecordClusterBan 见 runtime.ClusterBanRecorder：一次已成功下发的网段封禁的底账。
+//
+// 只写底账、不占活跃缓存，也不动 facts：InsertPending 那条路按单 IP 键占位并挂待确认
+// 标记，而 /24 不是一个 netip.Addr，内核回显的条目也不是「一个地址」，占位会与事件泵
+// 的对账互相误伤；信誉缓存同样按地址键，网段没有可对应的单地址。
+func (s *banSink) RecordClusterBan(info bans.BanInfo) {
+	s.recordBanLedger(info)
 }
 
 // Send 见 runtime.BanSink。client 为 nil 时按「不动作」处理并记一条调试日志。

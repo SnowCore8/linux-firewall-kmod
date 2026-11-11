@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -696,6 +697,154 @@ func TestRotationAfterModifyBeforeMoveSelfDoesNotReRead(t *testing.T) {
 	}
 	if reader.Offset() != info.Size() {
 		t.Fatalf("偏移应保持在新文件末尾 %d，实得 %d", info.Size(), reader.Offset())
+	}
+}
+
+// TestPendingReaddSurvivesFailedRemountAndReadsFromStart：重挂失败不能丢掉待重挂项。
+//
+// 挂失败时若提前 delete，fromStart 与「这里还欠一次重挂」的记忆一起丢失：下一次以
+// OpenAtEnd 打开轮转后的新文件，整段写入被跳过。这里用符号链接制造确定的挂载失败
+// （权限/Stat 失败走同一条失败路径，且在 root 下不可靠）。
+func TestPendingReaddSurvivesFailedRemountAndReadsFromStart(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	logPath := filepath.Join(dir, "auth.log")
+	writeFile(t, logPath, "")
+
+	ex := fixture(t, logPath, "pending-readd", &fakeStats{}, nil)
+	defer ex.Close()
+
+	clean := ingest.CleanPath(logPath)
+	id, _, _, ok := ex.entryForPath(logPath)
+	if !ok {
+		t.Fatal("初始应监视该日志")
+	}
+	// 模拟轮转后重挂失败：源已摘除，路径留在待重挂集合里。
+	ex.dropSource(id)
+	ex.pendingReadd[clean] = struct{}{}
+
+	target := filepath.Join(dir, "real.log")
+	writeFile(t, target, "")
+	if err := os.Remove(logPath); err != nil {
+		t.Fatalf("删除日志失败: %v", err)
+	}
+	if err := os.Symlink(target, logPath); err != nil {
+		t.Fatalf("建符号链接失败: %v", err)
+	}
+
+	ex.reconcileWatches()
+	if _, waiting := ex.pendingReadd[clean]; !waiting {
+		t.Fatal("重挂失败后必须保留待重挂项，否则 fromStart 与重试记忆一起丢失")
+	}
+	if ex.registry.ContainsPath(logPath) {
+		t.Fatal("符号链接不应被挂上")
+	}
+
+	// 路径恢复为普通文件，且内容在重挂之前就已写入：只有从文件头读才看得到。
+	if err := os.Remove(logPath); err != nil {
+		t.Fatalf("删除符号链接失败: %v", err)
+	}
+	writeFile(t, logPath, failedRec("203.0.113.71")+failedRec("203.0.113.72"))
+
+	ex.retryPendingReadd()
+	if !ex.registry.ContainsPath(logPath) {
+		t.Fatal("路径恢复后应重新挂上")
+	}
+	if got := ex.pipeline.Counters().IPsExtracted; got != 2 {
+		t.Fatalf("重挂后必须从文件头读起，提取 IP 数 = %d，期望 2", got)
+	}
+	if _, waiting := ex.pendingReadd[clean]; waiting {
+		t.Error("挂成功后应清除待重挂项")
+	}
+}
+
+// TestConfigFileAlsoUsedAsLogDrainsLinesAndReloads：同一路径既是配置文件又是日志源时，
+// 内容事件必须先把日志 owner 的字节读进来，再处理配置重载。
+//
+// 遇到 IsConfig owner 就 reload 并 return 的写法下，日志 owner 虽由 SetLogOwners 保留，
+// 却再没人 drain：这个文件后面的每一行都不会被判定。
+func TestConfigFileAlsoUsedAsLogDrainsLinesAndReloads(t *testing.T) {
+	dir := t.TempDir()
+	sharedPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, sharedPath, "")
+
+	cfg := configWithLog(t, sharedPath, "dual-owner")
+	cfg.ConfigFile = sharedPath
+	reloads := 0
+	reloader := &fakeReloader{apply: func(*config.Config) { reloads++ }}
+
+	signals, err := NewSignalSource()
+	if err != nil {
+		t.Fatalf("创建信号源失败: %v", err)
+	}
+	ex, err := NewInboundExecutor(cfg, signals, Deps{
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Reloader: reloader,
+	})
+	if err != nil {
+		t.Fatalf("入站执行体应能装配: %v", err)
+	}
+	defer ex.Close()
+
+	id, wd, _, ok := ex.entryForPath(sharedPath)
+	if !ok {
+		t.Fatal("应登记该路径")
+	}
+	entry, _ := ex.registry.Get(id)
+	if len(entry.Owners) != 2 {
+		t.Fatalf("同一路径应同时是配置与日志 owner，实得 %+v", entry.Owners)
+	}
+
+	appendFile(t, sharedPath, []byte(failedRec("203.0.113.61")))
+	ex.handleEvent(ingest.WatchEvent{WD: wd, Mask: unix.IN_MODIFY})
+
+	if got := ex.pipeline.Counters().LinesParsed; got != 1 {
+		t.Fatalf("双 owner 的内容事件必须先读行，lines_parsed = %d，期望 1（且不得重复读）", got)
+	}
+	if reloads != 1 {
+		t.Fatalf("配置重载次数 = %d，期望 1", reloads)
+	}
+}
+
+// TestRollbackKeepsConfigWatchOnTheRealFile：回滚读的是备份，但执行体的配置 watch
+// 必须仍钉在真实配置文件上，否则改真实配置不再触发热重载、备份反而成了配置来源。
+func TestRollbackKeepsConfigWatchOnTheRealFile(t *testing.T) {
+	configPath := reloadFixture(t, "")
+	dir := filepath.Dir(configPath)
+	current, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("读取当前配置失败: %v", err)
+	}
+	backup := strings.Replace(string(current), "  max_retries: 3", "  max_retries: 9", 1)
+	writeFile(t, filepath.Join(dir, "config.yaml.rollback"), backup)
+
+	cfg := configWithLog(t, filepath.Join(dir, "auth.log"), "rollback-config-watch")
+	cfg.ConfigFile = configPath
+	signals, err := NewSignalSource()
+	if err != nil {
+		t.Fatalf("创建信号源失败: %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ex, err := NewInboundExecutor(cfg, signals, Deps{
+		Logger:   logger,
+		Reloader: NewFileReloader(configPath, true, logger),
+	})
+	if err != nil {
+		t.Fatalf("入站执行体应能装配: %v", err)
+	}
+	defer ex.Close()
+
+	if !ex.registry.ContainsPath(configPath) {
+		t.Fatal("初始应监视真实配置文件")
+	}
+
+	ex.rollbackConfig()
+
+	if !ex.registry.ContainsPath(configPath) {
+		t.Error("回滚后配置 watch 必须仍指向真实配置文件")
+	}
+	if ex.registry.ContainsPath(filepath.Join(dir, "config.yaml.rollback")) {
+		t.Error("回滚后不得把备份文件当成配置来源")
 	}
 }
 

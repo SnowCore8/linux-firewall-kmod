@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -182,6 +183,74 @@ func TestResubscribeReplacesPendingWake(t *testing.T) {
 	}
 	if ready.Has(EventLinkDown) {
 		t.Fatal("重新武装后仍报告断开")
+	}
+}
+
+// TestSendTimesOutInsteadOfBlockingForever 钉住「发送有等待上限」。
+//
+// 阻塞式 sendto 在发送缓冲/对端接收队列满时会无限等下去，而调用方是主链路的唯一
+// goroutine——一条发不出去的报文就把采集与关停一起钉住。这里用「永远不可写」的桩
+// 稳定复现该状态（真实的内核队列满无法在单元测试里可靠制造）：
+func TestSendTimesOutInsteadOfBlockingForever(t *testing.T) {
+	tr := newTestTransport(t)
+	tr.sendTimeout = 120 * time.Millisecond
+	tr.sendto = func(int, []byte, int, unix.Sockaddr) error { return unix.EAGAIN }
+
+	start := time.Now()
+	err := tr.Send([]byte{1, 2, 3})
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrSendTimeout) {
+		t.Fatalf("发送应返回 ErrSendTimeout，实得 %v", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("发送等待了 %v，等待上限未生效", elapsed)
+	}
+}
+
+// TestCloseNotBlockedByStuckSend 验证 Close 不会被一条发不出去的报文扣住。
+//
+// 先置关闭标志、再取 sendMu 的顺序是本用例的存在理由：反过来先取 sendMu，发送方
+// 不放弃就永远拿不到锁，SIGTERM 之后的进程也退不出去。
+func TestCloseNotBlockedByStuckSend(t *testing.T) {
+	tr, err := openTransport(0)
+	if err != nil {
+		t.Skipf("无法建立 netlink 链路: %v", err)
+	}
+	tr.sendTimeout = 30 * time.Second
+
+	var once sync.Once
+	sendStarted := make(chan struct{})
+	tr.sendto = func(int, []byte, int, unix.Sockaddr) error {
+		once.Do(func() { close(sendStarted) })
+		return unix.EAGAIN
+	}
+
+	sendDone := make(chan error, 1)
+	go func() { sendDone <- tr.Send([]byte{1}) }()
+	select {
+	case <-sendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("发送没有进入不可写等待")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		tr.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close 卡在 sendMu 上")
+	}
+	select {
+	case err := <-sendDone:
+		if err == nil {
+			t.Fatal("链路已关闭，发送应当失败")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Send 未在关闭后返回")
 	}
 }
 

@@ -66,16 +66,27 @@ func (s *Supervisor) Spawn(name string, token *Shutdown, body func()) {
 	}()
 }
 
-// Shutdown 按登记逆序逐段串行关停，每段等待上限 timeout。
+// Shutdown 按登记逆序逐段串行关停，整条链的总时长上限 timeout。
 //
-// 返回结果顺序即实际关停顺序（最上游最先）。每段先置位其令牌，再等待该段结束，之后才处理
-// 下一段——这是「上游完全停止后才轮到下游」的实现要点。
+// 截止时间是所有段共用的一个：每段只用剩余时间等待。逐段各等一个 timeout 会让总时长
+// 随执行体数量叠加，且前一段超时后仍在为后一段耗预算——调用方随后的资源释放被拖到
+// 远超预期的时刻。截止时间已过时，剩余段只收到 Request、结果直接标 TimedOut。
+//
+// 返回结果顺序即实际关停顺序（最上游最先）。调用方据 Outcome 判断能否安全释放与
+// 仍在运行执行体共享的资源（见 main 的 ingest 收尾）。
 func (s *Supervisor) Shutdown(timeout time.Duration) []StopResult {
+	deadline := time.Now().Add(timeout)
 	results := make([]StopResult, 0, len(s.executors))
 	for i := len(s.executors) - 1; i >= 0; i-- {
 		exec := s.executors[i]
+		// 每段都先置位令牌：即便本次不再等待，也不能让后续收尾继续对着活跃执行体。
 		exec.token.Request()
-		results = append(results, StopResult{Name: exec.name, Outcome: joinWithTimeout(exec.done, timeout)})
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			results = append(results, StopResult{Name: exec.name, Outcome: TimedOut})
+			continue
+		}
+		results = append(results, StopResult{Name: exec.name, Outcome: joinWithTimeout(exec.done, remaining)})
 	}
 	s.executors = nil
 	return results

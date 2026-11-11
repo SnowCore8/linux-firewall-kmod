@@ -81,6 +81,13 @@ func (r *fileReloader) Rollback(cfg *config.Config) error {
 	if err := config.ParseConfigFile(backupPath, &newCfg, r.strict); err != nil {
 		return err
 	}
+	// ParseConfigFile 会把 ConfigFile 记成它读到的那个文件，而这里读的是备份。原样换入
+	// 会让执行体把配置 watch 挪到 config.yaml.rollback 上，真实配置从此不再触发重载。
+	// 按本重载器持有的配置来源还原单文件/目录语义。
+	newCfg.ConfigFile, newCfg.ConfigDir = r.path, ""
+	if info, statErr := os.Stat(r.path); statErr == nil && info.IsDir() {
+		newCfg.ConfigFile, newCfg.ConfigDir = "", r.path
+	}
 
 	// 与 Reload 同一口径：正则编译失败只告警，回滚照常应用。
 	warnings, err := jail.Finalize(&newCfg)

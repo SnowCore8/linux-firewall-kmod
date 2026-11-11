@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -270,6 +271,84 @@ func TestRollbackInDirectoryModeReadsTheBackupNextToTheSource(t *testing.T) {
 	}
 	if cfg.DefaultMaxRetries != 9 {
 		t.Errorf("回滚后的默认 max_retries = %d，期望备份里的 9", cfg.DefaultMaxRetries)
+	}
+	if cfg.ConfigDir != dir {
+		t.Errorf("回滚后 ConfigDir = %q，期望 %q（否则配置来源被换成备份所在位置）", cfg.ConfigDir, dir)
+	}
+	if cfg.ConfigFile != "" {
+		t.Errorf("目录模式回滚后的 ConfigFile = %q，期望空（否则退化成单文件重载）", cfg.ConfigFile)
+	}
+}
+
+// TestRollbackKeepsConfigSourceOnTheRealFile 钉住「回滚读备份，但配置来源仍是原文件」。
+//
+// ParseConfigFile 会把 ConfigFile 记成它读到的路径；回滚直接换入那份配置，执行体对
+// 配置文件的 watch 会跟着挪到 config.yaml.rollback 上，真实配置此后改动不再触发热重载。
+func TestRollbackKeepsConfigSourceOnTheRealFile(t *testing.T) {
+	path := reloadFixture(t, "")
+	current, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取当前配置失败: %v", err)
+	}
+	backup := strings.Replace(string(current), "  max_retries: 3", "  max_retries: 9", 1)
+	if backup == string(current) {
+		t.Fatal("测试前提失效：当前配置里没有 max_retries: 3")
+	}
+	writeFile(t, filepath.Join(filepath.Dir(path), "config.yaml.rollback"), backup)
+
+	cfg := config.Default()
+	cfg.ConfigFile = path
+	reloader := NewFileReloader(path, true, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := reloader.Rollback(&cfg); err != nil {
+		t.Fatalf("回滚失败: %v", err)
+	}
+	if cfg.DefaultMaxRetries != 9 {
+		t.Errorf("回滚后的 max_retries = %d，期望备份里的 9", cfg.DefaultMaxRetries)
+	}
+	if cfg.ConfigFile != path {
+		t.Errorf("回滚后 ConfigFile = %q，期望原配置文件 %q（否则配置 watch 跟着备份走）",
+			cfg.ConfigFile, path)
+	}
+	if cfg.ConfigDir != "" {
+		t.Errorf("单文件模式回滚后的 ConfigDir = %q，期望空", cfg.ConfigDir)
+	}
+}
+
+// TestRollbackDirectoryModeKeepsConfigSource 钉住目录模式下回滚不改写配置来源。
+func TestRollbackDirectoryModeKeepsConfigSource(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "auth.log")
+	writeFile(t, logPath, "")
+	jails := []string{
+		"jails:",
+		"  sshd:",
+		"    enabled: true",
+		"    log_files:",
+		"      - " + logPath,
+		"",
+	}
+	writeFile(t, filepath.Join(dir, "default.yaml"), strings.Join(append([]string{
+		"defaults:",
+		"  max_retries: 5",
+		"",
+	}, jails...), "\n"))
+	writeFile(t, filepath.Join(dir, "config.yaml.rollback"), strings.Join(append([]string{
+		"defaults:",
+		"  max_retries: 9",
+		"",
+	}, jails...), "\n"))
+
+	cfg := config.Default()
+	cfg.ConfigDir = dir
+	reloader := NewFileReloader(dir, true, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := reloader.Rollback(&cfg); err != nil {
+		t.Fatalf("目录模式回滚失败: %v", err)
+	}
+	if cfg.ConfigDir != dir {
+		t.Errorf("回滚后 ConfigDir = %q，期望 %q", cfg.ConfigDir, dir)
+	}
+	if cfg.ConfigFile != "" {
+		t.Errorf("目录模式回滚后的 ConfigFile = %q，期望空（否则退化成单文件重载）", cfg.ConfigFile)
 	}
 }
 

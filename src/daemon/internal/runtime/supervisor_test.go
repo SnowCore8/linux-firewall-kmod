@@ -112,6 +112,35 @@ func TestSupervisorReportsTimeoutForStuckExecutor(t *testing.T) {
 	}
 }
 
+// TestSupervisorShutdownSharesOneDeadline 验证关停链共用一个截止时间。
+//
+// 每段各等一个 timeout 时，总时长随执行体数量叠加：两个卡死执行体会各耗满一个
+// timeout。共用截止时间后，第二个只在截止时间前等剩余预算，到点后直接标 TimedOut。
+func TestSupervisorShutdownSharesOneDeadline(t *testing.T) {
+	sup := NewSupervisor()
+	block := make(chan struct{})
+	defer close(block)
+	// 两个都不监视关停令牌：都走超时路径。
+	sup.Spawn("stuck-a", NewShutdown(), func() { <-block })
+	sup.Spawn("stuck-b", NewShutdown(), func() { <-block })
+
+	start := time.Now()
+	results := sup.Shutdown(80 * time.Millisecond)
+	elapsed := time.Since(start)
+
+	if len(results) != 2 {
+		t.Fatalf("期望 2 个结果，实际 %d", len(results))
+	}
+	for _, r := range results {
+		if r.Outcome != TimedOut {
+			t.Fatalf("%s 应报告 TimedOut，实际 %v", r.Name, r.Outcome)
+		}
+	}
+	if elapsed > 300*time.Millisecond {
+		t.Fatalf("两段各等一个 timeout：总耗时 %v", elapsed)
+	}
+}
+
 // TestSupervisorEmptyShutsDownCleanly 验证空登记表关停无副作用。
 func TestSupervisorEmptyShutsDownCleanly(t *testing.T) {
 	sup := NewSupervisor()

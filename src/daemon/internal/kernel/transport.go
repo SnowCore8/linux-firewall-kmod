@@ -46,8 +46,27 @@ const RecvBuf = 128 * 1024
 // 检查关停标志。取值只影响关停的响应延迟与空闲唤醒频率，不影响正确性。
 const recvTimeout = 500 * time.Millisecond
 
+// defaultSendTimeout 是单次 Send 等待可写的上限。
+//
+// 阻塞式 sendto 没有超时可设：发送缓冲满（或对端接收队列满）时它会一直等，而调用方
+// 是主链路的唯一 goroutine——一条发不出去的报文就把整条采集与关停一起钉住。这里改用
+// MSG_DONTWAIT 探测 + 有限等待，最坏在此时长后返回错误。
+const defaultSendTimeout = 2 * time.Second
+
+// sendWaitSlice 是等待可写时检查关闭标志的间隔。
+//
+// Close 先置关闭标志再取 sendMu，发送方每片最多这么久就能看到并放弃，于是关停不会被
+// 一条发不出去的报文无限扣住。
+const sendWaitSlice = 20 * time.Millisecond
+
 // ErrTruncated 表示内核发来的数据报超过接收缓冲，内容不完整。
 var ErrTruncated = errors.New("netlink 数据报超过接收缓冲")
+
+// ErrSendTimeout 表示发送在等待上限内始终没能把报文交给内核。
+var ErrSendTimeout = errors.New("netlink 发送缓冲长时间不可写")
+
+// ErrTransportClosed 表示传输层已关闭，报文未发出。
+var ErrTransportClosed = errors.New("netlink 链路已关闭")
 
 // ErrMalformedDatagram 表示 `nlmsghdr` 自相矛盾（长度不足一个头或超过实得字节数）。
 var ErrMalformedDatagram = errors.New("nlmsghdr 声明的长度与实得字节数自相矛盾")
@@ -124,6 +143,13 @@ type Transport struct {
 	// recvBuf 复用接收缓冲区，避免每收一条报文分配 128 KiB（drain 循环高频调用）。
 	// TryRecv 仅由 reactor 单 goroutine 调用；返回的 Datagram.Payload 是拷贝，可安全复用。
 	recvBuf []byte
+
+	// sendTimeout 是单次 Send 的等待上限；0 表示用 defaultSendTimeout。
+	// 只为测试把它调短，生产路径不写入。
+	sendTimeout time.Duration
+	// sendto 是发送 syscall，测试可替换成「永远不可写」的桩，以便在无特权、
+	// 无内核模块的机器上稳定复现「发送缓冲已满」。nil 时走 unix.Sendto。
+	sendto func(fd int, p []byte, flags int, to unix.Sockaddr) error
 }
 
 // SetMetrics 接线 netlink 链路健康计数器。
@@ -240,6 +266,10 @@ func (t *Transport) Subscribe() error {
 // `nlmsg_type` 与 `nlmsg_seq` 均写 0：内核按自定义头里的 `msg_type` 分派，
 // `nlmsg_seq` 从未被内核读取。
 //
+// 等待可写的时间有上限（见 defaultSendTimeout）：发送缓冲满时返回 ErrSendTimeout，
+// 而不是像阻塞式 sendto 那样无限等下去——调用方是主链路的唯一 goroutine，钉住它等于
+// 连 SIGTERM 之后的关停也一起钉住。
+//
 // 成功仅表示已投递到内核，不代表命令已被执行——需要执行确认的路径必须单独等待回复。
 func (t *Transport) Send(payload []byte) error {
 	total := nlmsgHdrLen + len(payload)
@@ -255,7 +285,7 @@ func (t *Transport) Send(payload []byte) error {
 	copy(buf[nlmsgHdrLen:], payload)
 
 	t.sendMu.Lock()
-	err := unix.Sendto(t.fd, buf, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK})
+	err := t.sendLocked(buf)
 	t.txPend = err == nil
 	t.sendMu.Unlock()
 	if err != nil {
@@ -264,6 +294,57 @@ func (t *Transport) Send(payload []byte) error {
 	}
 	bumpCounter(t.sentCounter)
 	return nil
+}
+
+// sendLocked 在持有 sendMu 的前提下投递一条报文。
+//
+// 锁覆盖整个等待过程：Close 释放 fd 也要先拿到同一把锁，于是发送期间 fd 不会被关闭
+// 复用；反过来本函数每次重试都检查关闭标志，Close 取锁的等待也有界。
+//
+// 用 MSG_DONTWAIT 而不是切 socket 的 O_NONBLOCK：每次调用的标志不改变 socket 状态，
+// 收侧仍按阻塞 + SO_RCVTIMEO 工作（见 Subscribe）。
+func (t *Transport) sendLocked(buf []byte) error {
+	timeout := t.sendTimeout
+	if timeout <= 0 {
+		timeout = defaultSendTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	sa := &unix.SockaddrNetlink{Family: unix.AF_NETLINK}
+	for {
+		if t.isClosed() {
+			return ErrTransportClosed
+		}
+		err := t.rawSendto(t.fd, buf, unix.MSG_DONTWAIT, sa)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, unix.EAGAIN) && !errors.Is(err, unix.EWOULDBLOCK) {
+			return err
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return ErrSendTimeout
+		}
+		wait := sendWaitSlice
+		if remaining < wait {
+			wait = remaining
+		}
+		if _, perr := unix.Poll([]unix.PollFd{{Fd: int32(t.fd), Events: unix.POLLOUT}}, waitMillis(wait)); perr != nil &&
+			!errors.Is(perr, unix.EINTR) {
+			return fmt.Errorf("等待 netlink 可写失败：%w", perr)
+		}
+		// poll 报可写不等于内核收得下（对端接收队列满时 sendto 仍拒收）：短暂退避，
+		// 避免这种状态下空转。
+		time.Sleep(sendWaitSlice / 4)
+	}
+}
+
+// rawSendto 调用真实发送 syscall；测试可替换 t.sendto 制造「持续不可写」。
+func (t *Transport) rawSendto(fd int, p []byte, flags int, to unix.Sockaddr) error {
+	if t.sendto != nil {
+		return t.sendto(fd, p, flags, to)
+	}
+	return unix.Sendto(fd, p, flags, to)
 }
 
 // TryRecv 尝试收取一条报文。
@@ -500,30 +581,27 @@ func (t *Transport) pokeWakeFd() {
 }
 
 // Close 关闭 socket 并宣告接收侧退出。
-// 先获取 sendMu 确保所有进行中的 Send 完成，再获取 closeMu 执行关闭，
-// 避免 Send 在 Close 关闭 fd 后仍使用该 fd 的竞态。
+//
+// 顺序是先置关闭标志、唤醒等待者，再取 sendMu 收尾，最后关 fd。不能先取 sendMu：
+// 一条发不出去的报文会让发送方长期持锁，关闭路径就永远拿不到它，SIGTERM 之后的
+// 进程也退不出去。发送方每次重试都检查关闭标志，故这里的等待最多一个 sendWaitSlice；
+// 拿到锁即证明没有在途 sendto，fd 可以安全关闭（不引入 double close / fd 复用）。
 func (t *Transport) Close() {
-	t.sendMu.Lock()
 	t.closeMu.Lock()
 	if t.closed {
 		t.closeMu.Unlock()
-		t.sendMu.Unlock()
 		return
 	}
 	t.closed = true
-	// 先信号告知消费者链路已断，使其退出循环，避免在 fd 关闭后仍尝试操作
-	wakeFd := t.wakeFd
 	t.closeMu.Unlock()
-	// 写入 eventfd 唤醒 Poll（如果正在等待）
-	if wakeFd >= 0 {
-		var buf [8]byte
-		binary.LittleEndian.PutUint64(buf[:], 1)
-		_, _ = unix.Write(wakeFd, buf[:])
-	}
+
+	// 关 linkDown 通道唤醒 select 上的等待者，写 eventfd 唤醒阻塞在 epoll_wait 的
+	// 接收回路；在途 Send 也会在一个 sendWaitSlice 内看到关闭标志。
 	t.SignalLinkDown()
-	// 消费者已退出，安全关闭 fd
+
+	t.sendMu.Lock()
 	t.closeMu.Lock()
-	epFd, fd := t.epFd, t.fd
+	epFd, wakeFd, fd := t.epFd, t.wakeFd, t.fd
 	t.epFd, t.wakeFd, t.fd = -1, -1, -1
 	t.closeMu.Unlock()
 	t.sendMu.Unlock()

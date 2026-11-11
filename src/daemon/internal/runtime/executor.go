@@ -91,6 +91,17 @@ type BanSink interface {
 	RollbackInsert(ip string)
 }
 
+// ClusterBanRecorder 是 BanSink 的可选扩展：集群网段封禁成功下发后的记账入口。
+//
+// 集群封禁不经过 BanSink.InsertPending：那条路按单 IP 键占位活跃缓存与待确认标记，
+// 而网段不是 netip.Addr，内核回显的条目也不是「一个地址」，占位会与事件泵的对账
+// 互相误伤。但底账必须与自动单 IP 封禁同一个入口，否则网段封禁在 ban_events /
+// ban_history / 信誉表里完全缺失。没实现本接口的 sink 只是少了底账，不影响下发。
+type ClusterBanRecorder interface {
+	// RecordClusterBan 在网段封禁已成功下发内核之后记录底账。
+	RecordClusterBan(info bans.BanInfo)
+}
+
 // StatsSink 是统计计数器的写入端。
 //
 // 计数口径由执行体决定，sink 只负责落数：lines_parsed / lines_skipped / regex_matches 直接
@@ -592,19 +603,24 @@ func (e *InboundExecutor) handleEvent(event ingest.WatchEvent) {
 		return
 	}
 
-	// 检查是否有配置文件 owner
+	// 同一路径可能既是配置文件又是日志文件：先按日志 owner 收完本批字节，再处理
+	// 配置重载。反过来先 return 的话，日志 owner 虽被保留却永远等不到读取。
+	hasConfig := false
 	for _, owner := range entry.Owners {
 		if owner.IsConfig {
-			if event.IsContentChange() || event.IsSelfGone() {
-				e.info("检测到配置文件变化，自动重载", "path", entry.Path)
-				e.reloadConfig()
-			}
-			return
+			hasConfig = true
+			break
 		}
 	}
 
 	if event.IsContentChange() {
+		// drainSource 只对 Jail owner 生效，纯配置文件源在这里是空操作。
 		e.drainSource(id)
+	}
+	if hasConfig && (event.IsContentChange() || event.IsSelfGone()) {
+		e.info("检测到配置文件变化，自动重载", "path", entry.Path)
+		e.reloadConfig()
+		return
 	}
 	if event.IsSelfGone() {
 		e.handleRotation(id, entry.Path)
@@ -891,16 +907,29 @@ func (e *InboundExecutor) reconcileWatches() {
 
 	for _, lsPath := range logPaths {
 		clean := ingest.CleanPath(lsPath)
-		if _, _, _, ok := e.entryForPath(lsPath); ok {
+		if id, _, _, ok := e.entryForPath(lsPath); ok {
 			// 已在监视：把日志 owner 集合精确对齐到当前启用的 jail，保留 SourceID、
 			// wd、inode 与读取偏移；禁用但仍留在 owner 表里的 jail 由此被摘掉。
 			e.registry.SetLogOwners(clean, logOwners[clean])
+			// 同一路径可能先作为配置文件登记（配置文件与日志文件重合）：那时只挂了
+			// watch，没有读取器。只对齐 owner 的话日志 owner 永远等不到读行。
+			if len(logOwners[clean]) > 0 && e.readers[id] == nil {
+				_, fromStart := e.pendingReadd[clean]
+				e.readers[id] = e.newSourceReader(lsPath, fromStart)
+				if _, statErr := os.Stat(lsPath); statErr == nil {
+					delete(e.pendingReadd, clean)
+				}
+				e.drainSource(id)
+			}
 			continue
 		}
 		// 待重挂的源从文件头读；其余（新出现的文件）定位到末尾，不回放历史。
+		// 挂失败（Stat / inotify / 权限）时必须保留待重挂项：丢失 fromStart 后下一次
+		// 会以 OpenAtEnd 打开轮转后的新文件，整段写入被跳过。
 		_, fromStart := e.pendingReadd[clean]
-		delete(e.pendingReadd, clean)
-		e.addSharedLogSource(logOwners[clean], lsPath, fromStart)
+		if _, added := e.addSharedLogSource(logOwners[clean], lsPath, fromStart); added {
+			delete(e.pendingReadd, clean)
+		}
 	}
 
 	// 已不再配置的路径不必再等。
@@ -938,15 +967,22 @@ func (e *InboundExecutor) addSharedLogSource(jails []string, path string, fromSt
 	for _, jail := range jails[1:] {
 		e.registry.Register(ingest.LogOwner(jail), path, wd, inode)
 	}
-	reader := ingest.NewSourceReader(e.logger)
-	if !fromStart {
-		reader.OpenAtEnd(path)
-	}
+	reader := e.newSourceReader(path, fromStart)
 	e.readers[id] = reader
 	// 立即读一次：覆盖「内容先于 watch 到达」的窗口——轮转后新文件在挂 watch 之前就
 	// 被写入时，不会有任何 inotify 事件来触发读取。
 	e.drainSource(id)
 	return id, true
+}
+
+// newSourceReader 按 fromStart 语义建一个读取器：待重挂的源从文件头读，其余定位到
+// 末尾，不回放历史。
+func (e *InboundExecutor) newSourceReader(path string, fromStart bool) *ingest.SourceReader {
+	reader := ingest.NewSourceReader(e.logger)
+	if !fromStart {
+		reader.OpenAtEnd(path)
+	}
+	return reader
 }
 
 // addConfigWatch 给配置文件挂 watch。
@@ -1310,11 +1346,39 @@ func (e *InboundExecutor) dispatchClusterHit(jail string, hit decision.ClusterHi
 	// 下发形状与白名单路径一致：裸网络地址 + 前缀长度（CidrKey.Addr() 已归一）。
 	if err := e.sink.Send(hit.CIDR.Addr(), uint8(hit.CIDR.PrefixLen()), cfg.BanTime, reason); err != nil {
 		e.warn("集群网段封禁下发失败", "jail", jail, "cidr", hit.CIDR.String(), "error", err)
+	} else if recorder, ok := e.sink.(ClusterBanRecorder); ok {
+		// 网段封禁同样进底账：否则集群封禁在事件表、复发统计与信誉表里完全不可见。
+		recorder.RecordClusterBan(clusterBanInfo(jail, hit.CIDR.Prefix(), cfg.BanTime, reason))
 	}
 	// 下发失败也算处置过：失败已记一行日志，而检测间隔远小于 cluster.Window，
 	// 保留计数会让同一网段每个周期都重试并重复告警，把真实原因刷掉。失败后的重试
 	// 靠后续失败日志重新累计；内核拒绝（多为封禁表满）也不是本周期内能恢复的。
 	return true
+}
+
+// clusterBanInfo 把一次集群命中整理成底账条目。
+//
+// IP 取网段的网络地址（已归一），PrefixLen 保留网段长度；底账表不存前缀，读侧会把
+// 这条记录当成那个基地址的单机封禁——这是「至少让网段封禁可见」的取舍，比整段缺失好。
+//
+// BanCount 固定记 1：网段不是「某地址第几次复发」，按单 IP 的复发计数读它没有意义；
+// 底账要的是「这个网段被封过一次、封了多久」。
+func clusterBanInfo(jail string, cidr netip.Prefix, banTime uint32, reason string) bans.BanInfo {
+	now := nowSecs()
+	info := bans.BanInfo{
+		IP:        cidr.Addr().String(),
+		PrefixLen: uint8(cidr.Bits()),
+		JailName:  jail,
+		Reason:    reason,
+		BannedAt:  now,
+		BanCount:  1,
+	}
+	if banTime == 0 {
+		info.IsPermanent = true
+	} else {
+		info.ExpiresAt = now + int64(banTime)
+	}
+	return info
 }
 
 // dispatchIntent 把一个封禁意图下发内核，并镜像到本地缓存与统计。

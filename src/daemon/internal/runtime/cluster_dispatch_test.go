@@ -1,18 +1,146 @@
 package runtime
 
 import (
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/bans"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/decision"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/detect"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/ingest"
 )
+
+// ledgerSink 在 fakeSink 之上记录网段封禁的底账调用。
+type ledgerSink struct {
+	fakeSink
+	mu     sync.Mutex
+	ledger []bans.BanInfo
+}
+
+func (s *ledgerSink) RecordClusterBan(info bans.BanInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ledger = append(s.ledger, info)
+}
+
+func (s *ledgerSink) ledgerSnapshot() []bans.BanInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]bans.BanInfo, len(s.ledger))
+	copy(out, s.ledger)
+	return out
+}
+
+// TestClusterDispatchRecordsBanLedger 钉住「集群网段封禁进底账」。
+//
+// 直接 sink.Send 的写法下，网段封禁在 ban_events / ban_history / 信誉表里完全缺失：
+// 复发统计与分级成效都读不到它。底账键取 CIDR 文本，理由里必须能看出是 cluster。
+func TestClusterDispatchRecordsBanLedger(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	logPath := filepath.Join(dir, "cluster-ledger.log")
+	writeFile(t, logPath, "")
+
+	sink := &ledgerSink{fakeSink: fakeSink{insertWinner: true}}
+	ex, _ := directiveFixture(t, logPath, "probe", sink)
+
+	ips := []netip.Addr{
+		netip.MustParseAddr("203.0.113.11"),
+		netip.MustParseAddr("203.0.113.12"),
+		netip.MustParseAddr("203.0.113.13"),
+	}
+	cfg := config.ClusterConfig{
+		Enabled: true, PrefixV4: 24, Window: 600, MinIPs: 3, MaxPerIP: 1, BanTime: 300,
+	}
+	hit := decision.ClusterHit{CIDR: detect.SubnetKey(ips[0], 24), IPs: ips, Peak: 1}
+	if !ex.dispatchClusterHit("probe", hit, cfg) {
+		t.Fatal("非审计模式必须报告已处置")
+	}
+
+	ledger := sink.ledgerSnapshot()
+	if len(ledger) != 1 {
+		t.Fatalf("网段封禁必须记一次底账，实得 %d 次", len(ledger))
+	}
+	info := ledger[0]
+	if info.IP != "203.0.113.0" {
+		t.Errorf("底账键 = %q，期望归一化的网络地址 203.0.113.0", info.IP)
+	}
+	if info.PrefixLen != 24 {
+		t.Errorf("PrefixLen = %d，期望 24", info.PrefixLen)
+	}
+	if info.JailName != "probe" {
+		t.Errorf("JailName = %q，期望 probe", info.JailName)
+	}
+	if !strings.Contains(info.Reason, "cluster") {
+		t.Errorf("理由必须能看出是集群判定: %q", info.Reason)
+	}
+	if info.IsPermanent {
+		t.Error("ban_time=300 不应记成永久")
+	}
+	if got := info.ExpiresAt - info.BannedAt; got != 300 {
+		t.Errorf("计划时长 = %d 秒，期望 300", got)
+	}
+	if info.BanCount != 1 {
+		t.Errorf("BanCount = %d，期望 1", info.BanCount)
+	}
+}
+
+// TestClusterAuditModeRecordsNoLedger：审计模式不下发，也就不该有底账。
+func TestClusterAuditModeRecordsNoLedger(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	logPath := filepath.Join(dir, "cluster-ledger-audit.log")
+	writeFile(t, logPath, "")
+
+	sink := &ledgerSink{fakeSink: fakeSink{insertWinner: true}}
+	ex, _ := directiveFixture(t, logPath, "probe", sink)
+
+	ips := []netip.Addr{
+		netip.MustParseAddr("203.0.113.31"),
+		netip.MustParseAddr("203.0.113.32"),
+		netip.MustParseAddr("203.0.113.33"),
+	}
+	hit := decision.ClusterHit{CIDR: detect.SubnetKey(ips[0], 24), IPs: ips, Peak: 1}
+	ex.dispatchClusterHit("probe", hit, config.ClusterConfig{
+		Enabled: true, AuditOnly: true, PrefixV4: 24, Window: 600, MinIPs: 3, MaxPerIP: 1, BanTime: 300,
+	})
+
+	if got := len(sink.ledgerSnapshot()); got != 0 {
+		t.Fatalf("审计模式不得记底账，实得 %d 次", got)
+	}
+}
+
+// TestClusterSendFailureRecordsNoLedger：下发失败不是「封禁已发生」，不得进底账。
+func TestClusterSendFailureRecordsNoLedger(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	logPath := filepath.Join(dir, "cluster-ledger-fail.log")
+	writeFile(t, logPath, "")
+
+	sink := &ledgerSink{fakeSink: fakeSink{insertWinner: true, sendErr: errors.New("表满")}}
+	ex, _ := directiveFixture(t, logPath, "probe", sink)
+
+	ips := []netip.Addr{
+		netip.MustParseAddr("203.0.113.41"),
+		netip.MustParseAddr("203.0.113.42"),
+		netip.MustParseAddr("203.0.113.43"),
+	}
+	hit := decision.ClusterHit{CIDR: detect.SubnetKey(ips[0], 24), IPs: ips, Peak: 1}
+	ex.dispatchClusterHit("probe", hit, config.ClusterConfig{
+		Enabled: true, PrefixV4: 24, Window: 600, MinIPs: 3, MaxPerIP: 1, BanTime: 300,
+	})
+
+	if got := len(sink.ledgerSnapshot()); got != 0 {
+		t.Fatalf("下发失败不得记底账，实得 %d 次", got)
+	}
+}
 
 // TestClusterDispatchReasonFitsWireField 钉住集群网段封禁的原因文本落在契约的定长
 // 字段（BanIp.reason = str[32]，含结尾 NUL）之内。

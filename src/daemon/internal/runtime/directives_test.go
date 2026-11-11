@@ -24,6 +24,8 @@ type fakeSink struct {
 	rolled  []string
 	// insertWinner 控制占位是否让位（false 时模拟「已在镜像里」）。
 	insertWinner bool
+	// sendErr 非空时模拟下发失败（内核拒绝）。
+	sendErr error
 }
 
 func newAcceptingSink() *fakeSink { return &fakeSink{insertWinner: true} }
@@ -43,7 +45,7 @@ func (s *fakeSink) Send(addr netip.Addr, _ uint8, _ uint32, reason string) error
 	defer s.mu.Unlock()
 	s.sends = append(s.sends, addr.String())
 	s.reasons = append(s.reasons, reason)
-	return nil
+	return s.sendErr
 }
 
 func (s *fakeSink) RollbackInsert(ip string) {
