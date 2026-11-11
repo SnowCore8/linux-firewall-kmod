@@ -275,40 +275,44 @@ func (h *APIHandlers) DeleteBan(w http.ResponseWriter, r *http.Request) {
 
 // UnbanAllTemporary 撤掉所有临时封禁；有 IP 的内核解封下发失败就回业务码 40003。
 //
-// 失败时镜像里的封禁已经撤掉、响应不再是成功：契约给这条路由编的码就是「批量解封临时
-// 封禁失败」，把部分失败包成 200 + fail_count 会让运维以为拦截已全部撤除，而面板上
-// 看不见的 netfilter 规则还在生效。
+// 顺序是「取快照 → 逐条下发内核 → 成功后撤镜像」（同 DeleteBan）：内核没确认的条目
+// 留在镜像里并计入失败，面板与 netfilter 才一致。反过来先撤镜像会让面板显示已无封禁，
+// 而 netfilter 规则仍在丢包，且 DeleteBan 会因「不在封禁表中」拒绝重试。
+//
+// 部分失败同样回 40003：把失败包成 200 + fail_count 会让运维以为拦截已全部撤除。
 func (h *APIHandlers) UnbanAllTemporary(w http.ResponseWriter, r *http.Request) {
-	infos := bans.GlobalCache().UnbanTemporaryInfos()
-	ips := make([]string, len(infos))
-	for i := range infos {
-		ips[i] = infos[i].IP
-	}
+	infos := bans.GlobalCache().TemporaryInfos()
 
 	var failed []string
-	if h.kernelBan != nil {
-		for _, info := range infos {
-			addr, err := netip.ParseAddr(info.IP)
-			if err != nil {
-				failed = append(failed, info.IP+"（IP 非法）")
-				continue
-			}
-			// 按镜像里记录的前缀解封：网段封禁用单机前缀撤不掉，内核会回 -ENOENT。
-			prefixLen := info.PrefixLen
-			if prefixLen == 0 {
-				prefixLen = bans.FullPrefixLen(addr)
-			}
+	succeeded := make([]string, 0, len(infos))
+	for _, info := range infos {
+		addr, err := netip.ParseAddr(info.IP)
+		if err != nil {
+			failed = append(failed, info.IP+"（IP 非法）")
+			continue
+		}
+		// 按镜像里记录的前缀解封：网段封禁用单机前缀撤不掉，内核会回 -ENOENT。
+		prefixLen := info.PrefixLen
+		if prefixLen == 0 {
+			prefixLen = bans.FullPrefixLen(addr)
+		}
+		// 内核客户端缺席（未装配）时同 DeleteBan：只撤镜像。
+		if h.kernelBan != nil {
 			if err := h.kernelBan.Remove(addr, prefixLen); err != nil {
 				h.server.logger.Error("批量内核解封失败", "ip", info.IP, "error", err)
 				failed = append(failed, info.IP+"（内核解封失败）")
+				continue
 			}
 		}
+		// 内核已确认才撤镜像；并发的 DeleteBan 可能已先撤掉，Remove 返回 false 也按成功。
+		bans.GlobalCache().Remove(info.IP)
+		succeeded = append(succeeded, info.IP)
 	}
 
-	// 与 DeleteBan 同一口径：镜像里已被撤掉的临时封禁逐条记解封时刻。
-	// failed 只说明 netfilter 那条规则没撤成（它到 TTL 会自己消失），不影响这里记账。
+	// 与 DeleteBan 同一口径：镜像里已被撤掉的临时封禁逐条记解封时刻。仍留在镜像里的
+	// 失败条目没有解封，不记。
 	if h.db != nil {
-		for _, ip := range ips {
+		for _, ip := range succeeded {
 			if err := h.db.RecordUnbanHistory(ip); err != nil {
 				h.server.logger.Error("record unban history", "ip", ip, "error", err)
 			}
@@ -319,13 +323,13 @@ func (h *APIHandlers) UnbanAllTemporary(w http.ResponseWriter, r *http.Request) 
 
 	if len(failed) > 0 {
 		WriteCode(w, httpcontract.Code40003, fmt.Sprintf(
-			"批量解封临时封禁失败：%d/%d 条未下发内核，首个原因 %s", len(failed), len(ips), failed[0]))
+			"批量解封临时封禁失败：%d/%d 条未下发内核，首个原因 %s", len(failed), len(infos), failed[0]))
 		return
 	}
 
 	WriteSuccess(w, BatchOperationResponse{
-		Total:       uint64(len(ips)),
-		Succeeded:   uint64(len(ips)),
+		Total:       uint64(len(infos)),
+		Succeeded:   uint64(len(succeeded)),
 		FailedCount: 0,
 		Details:     []string{},
 	})

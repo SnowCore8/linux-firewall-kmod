@@ -283,6 +283,24 @@ func (c *ActiveBanCache) UnbanTemporaryWithIPs() []string {
 	return ips
 }
 
+// TemporaryInfos 返回全部非永久封禁的只读快照，不改动镜像。
+//
+// 批量解封先取快照、逐条下发内核，内核确认后才按 IP 调 Remove：内核没确认的条目
+// 必须留在镜像里，否则面板显示已无封禁而 netfilter 仍在丢包，且再点解封会因
+// 「不在封禁表中」被拒。
+func (c *ActiveBanCache) TemporaryInfos() []BanInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	infos := make([]BanInfo, 0, len(c.bans))
+	for _, info := range c.bans {
+		if info.IsPermanent {
+			continue
+		}
+		infos = append(infos, info)
+	}
+	return infos
+}
+
 // UnbanTemporaryInfos 解封所有非永久封禁，返回被解封条目的完整信息。
 //
 // 与 UnbanTemporaryWithIPs 逐条同源，区别只是保留 PrefixLen：批量解封必须按镜像里

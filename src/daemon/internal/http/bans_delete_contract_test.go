@@ -44,6 +44,21 @@ func seedBan(t *testing.T, ip string) {
 	t.Cleanup(func() { removeBanForTest(ip) })
 }
 
+// seedTemporaryBan 往进程级封禁镜像里放一条临时封禁，并在用例结束时摘掉。
+func seedTemporaryBan(t *testing.T, ip string) {
+	t.Helper()
+
+	if !bans.GlobalCache().TryInsert(bans.BanInfo{
+		IP:        ip,
+		Reason:    "manual",
+		BannedAt:  1700000000,
+		ExpiresAt: 1700003600,
+	}) {
+		t.Fatalf("%s 已在封禁镜像中，用例之间的状态不干净", ip)
+	}
+	t.Cleanup(func() { removeBanForTest(ip) })
+}
+
 // TestDeleteBanKeepsMirrorWhenKernelFails 核对内核失败口径：回 40002，镜像条目原样留着。
 //
 // 永久封禁（duration_secs=0）在内核侧没有到期定时器，条目不会自行消失；此时把镜像撤掉
@@ -155,6 +170,45 @@ func TestBatchUnbanTemporaryUsesMirroredPrefix(t *testing.T) {
 	}
 	if len(kernel.removePrfx) != 1 || kernel.removePrfx[0] != 24 {
 		t.Fatalf("批量解封前缀 = %v，期望 [24]", kernel.removePrfx)
+	}
+}
+
+// TestUnbanAllTemporaryKeepsMirrorWhenKernelFails 核对批量解封的内核失败口径：回 40003，
+// 未确认的条目留在镜像里。先撤镜像再下发会让面板显示已无封禁、netfilter 仍在丢包，
+// 且 DeleteBan 会因「不在封禁表中」拒绝重试。
+func TestUnbanAllTemporaryKeepsMirrorWhenKernelFails(t *testing.T) {
+	const ip = "203.0.113.92"
+
+	kernel := &fakeKernelBan{removeErr: errors.New("netlink 发送失败")}
+	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.KernelBan = kernel })
+	seedTemporaryBan(t, ip)
+
+	w := authedSend(t, s, http.MethodPost, "/api/v2/bans/unban-temporary", "", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("状态码 %d，期望 %d（body=%s）", w.Code, http.StatusBadRequest, truncate(w.Body.Bytes()))
+	}
+	if got := envelopeCode(t, decodeEnvelope(t, w.Body.Bytes())); got != httpcontract.Code40003 {
+		t.Errorf("code = %d，期望 %d", got, httpcontract.Code40003)
+	}
+	if _, ok := bans.GlobalCache().Get(ip); !ok {
+		t.Error("内核解封失败后镜像条目被撤掉了：面板显示已无封禁，而 netfilter 规则仍在丢包")
+	}
+}
+
+// TestUnbanAllTemporaryRemovesMirrorAfterKernelAck 核对成功路径：内核确认之后才撤镜像。
+func TestUnbanAllTemporaryRemovesMirrorAfterKernelAck(t *testing.T) {
+	const ip = "203.0.113.93"
+
+	kernel := &fakeKernelBan{}
+	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.KernelBan = kernel })
+	seedTemporaryBan(t, ip)
+
+	w := authedSend(t, s, http.MethodPost, "/api/v2/bans/unban-temporary", "", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态码 %d，期望 200（body=%s）", w.Code, truncate(w.Body.Bytes()))
+	}
+	if _, ok := bans.GlobalCache().Get(ip); ok {
+		t.Error("内核已确认解封，镜像里那条临时封禁还在")
 	}
 }
 
