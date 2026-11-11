@@ -192,6 +192,13 @@ export default function Bans() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, pageSize, sortBy])
 
+  // 封禁到期会让总数缩水，当前页码可能越界：停在空页上翻不回来。
+  // 用服务端返回的 total_pages 夹取（服务端的 page_size 可能被夹到上限，不能自己算）。
+  const totalPages = query.data ? Math.max(1, query.data.total_pages) : 0
+  useEffect(() => {
+    if (totalPages > 0 && page > totalPages) setPage(totalPages)
+  }, [totalPages, page])
+
   // SSE 帧节流状态：上次真正重取的时刻 + 待触发的尾沿定时器
   const lastSseRefetchRef = useRef(0)
   const sseTrailingRef = useRef<number | null>(null)
@@ -559,7 +566,7 @@ export default function Bans() {
           pageSize,
           total: query.data?.total ?? 0,
           showSizeChanger: true,
-          pageSizeOptions: [20, 50, 100, 200],
+          pageSizeOptions: [20, 50, 100],
           showTotal: (t) => `共 ${t} 条`,
           onChange: (p, ps) => {
             setPage(p)

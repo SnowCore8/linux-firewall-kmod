@@ -108,6 +108,10 @@ export default function Logs() {
   const lineIdRef = useRef(0)
   const pausedRef = useRef(paused)
   pausedRef.current = paused
+  // 异步回调（sse-status 探测、重连定时器）返回时 mode 可能已切走：
+  // 离开实时流后它们不能再建连接或改状态，否则历史模式下会被重新拉出一条流。
+  const modeRef = useRef(mode)
+  modeRef.current = mode
   const viewerRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(true)
 
@@ -119,8 +123,11 @@ export default function Logs() {
     return () => window.clearInterval(id)
   }, [paused])
 
-  // 卸载保护：异步回调在组件卸载后不应触发状态更新
+  // 卸载保护：异步回调在组件卸载后不应触发状态更新。
+  // StrictMode 下 effect 会 mount→unmount→mount，重挂载必须把标志复位，
+  // 否则第一次卸载后它就永远为 false，后续所有异步回调都被静默丢弃。
   useEffect(() => {
+    mountedRef.current = true
     return () => {
       mountedRef.current = false
     }
@@ -236,10 +243,11 @@ export default function Logs() {
       }
       // 连接错误：自己接管重连（不用 EventSource 自带策略），先探上限
       closeStream()
+      if (modeRef.current !== 'live') return
       setLiveState('reconnecting')
       void getSseStatus()
         .then((status) => {
-          if (!mountedRef.current) return
+          if (!mountedRef.current || modeRef.current !== 'live') return
           if (status.logs.limit_reached) {
             attemptsRef.current = 0
             setLiveState('limit')
@@ -248,11 +256,12 @@ export default function Logs() {
           scheduleReconnect()
         })
         .catch(() => {
-          if (mountedRef.current) scheduleReconnect()
+          if (mountedRef.current && modeRef.current === 'live') scheduleReconnect()
         })
     })
 
     function scheduleReconnect() {
+      if (modeRef.current !== 'live') return
       if (attemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
         setLiveState('exhausted')
         return
@@ -262,7 +271,7 @@ export default function Logs() {
       clearTimer()
       timerRef.current = window.setTimeout(() => {
         timerRef.current = null
-        connect()
+        if (modeRef.current === 'live') connect()
       }, delay)
     }
   }, [closeStream, clearTimer])
