@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/risk"
 )
 
 func newTestDB(t *testing.T) *DB {
@@ -244,5 +246,54 @@ func TestPenaltyIsConfigurable(t *testing.T) {
 	f.RecordFailure(addr(t, "203.0.113.40"))
 	if got := f.ReputationScore(addr(t, "203.0.113.40")); got != 75 {
 		t.Fatalf("扣分 25 后 = %d，期望 75", got)
+	}
+}
+
+// 关停时 eventCh 里已入队但尚未落库的事件必须写完再退：它们正是风险查询接口的读数。
+func TestStopDrainsQueuedRiskEvents(t *testing.T) {
+	db := newTestDB(t)
+	f := NewFacts(db, FactsOptions{RiskEngineEnabled: true})
+	ip := "203.0.113.50"
+	f.RecordRiskEvent(addr(t, ip), risk.EventFailure, 1.0)
+	f.Stop()
+
+	n, err := db.CountEventsByIP(ip)
+	if err != nil {
+		t.Fatalf("统计事件失败: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("关停后库里事件数 = %d，期望 1（队列已排空）", n)
+	}
+	// 幂等：重复调用不能重复关 channel。
+	f.Stop()
+}
+
+// Stop 之后仍可能有一条在途判定调用 RecordRiskEvent：不得向已关闭的 channel 发送。
+func TestRecordRiskEventAfterStopIsSafe(t *testing.T) {
+	db := newTestDB(t)
+	f := NewFacts(db, FactsOptions{RiskEngineEnabled: true})
+	f.Stop()
+	f.RecordRiskEvent(addr(t, "203.0.113.51"), risk.EventFailure, 1.0)
+	f.RecordFailure(addr(t, "203.0.113.51"))
+}
+
+// 逐出时落盘失败必须把欠账留在缓存里（重新入队），而不是随被逐出的对象一起丢掉。
+func TestEvictionWriteFailureKeepsPending(t *testing.T) {
+	db := newTestDB(t)
+	f := NewFacts(db, FactsOptions{Capacity: 1})
+	f.RecordFailure(addr(t, "203.0.113.60"))
+
+	_ = db.Close() // 让逐出落盘必定失败
+	f.RecordFailure(addr(t, "203.0.113.61"))
+
+	entries, pending := f.Stats()
+	if entries != 2 {
+		t.Fatalf("逐出落盘失败后条目数 = %d，期望 2（被逐出条目重新入队）", entries)
+	}
+	if pending != 2 {
+		t.Fatalf("待落盘条目数 = %d，期望 2（欠账未丢）", pending)
+	}
+	if got := f.ReputationScore(addr(t, "203.0.113.60")); got != 90 {
+		t.Fatalf("被逐出条目的分数 = %d，期望 90", got)
 	}
 }

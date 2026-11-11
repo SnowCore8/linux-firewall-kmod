@@ -228,6 +228,8 @@ func run(args []string) error {
 				<-cleanupDone
 				<-recoveryDone
 				<-factsDone
+				// 风险事件 worker 也写同一个库：必须先排空它再走到 db.Close。
+				facts.Stop()
 			}()
 			historyDB = db
 			logger.Info("持久化数据库已就绪", "path", cfg.HistoryDBPath)

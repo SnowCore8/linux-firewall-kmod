@@ -94,8 +94,12 @@ type Facts struct {
 	// 满时丢弃新事件而非阻塞主链路或创建无界 goroutine。
 	eventCh chan riskEvent
 	// eventWorkers 是持久化 worker 数量，与 CPU 数解耦（SQLite 单写连接，多 worker 无益）。
-	eventWorkers int
-	eventOnce    sync.Once
+	eventWorkers  int
+	eventWG       sync.WaitGroup
+	eventStopOnce sync.Once
+	// stopped 在 mu 下读写：关停时同一个临界区内「置位 + 关闭 eventCh」，
+	// 生产方的非阻塞发送也持同一把锁，故不会向已关闭的 channel 发送。
+	stopped bool
 }
 
 // riskEvent 是异步持久化的风险事件。
@@ -166,15 +170,29 @@ func NewFacts(db *DB, opts FactsOptions) *Facts {
 
 // startEventWorkers 启动风险事件持久化 worker。
 func (f *Facts) startEventWorkers() {
-	f.eventOnce.Do(func() {
-		for i := 0; i < f.eventWorkers; i++ {
-			go f.eventWorker()
-		}
+	for i := 0; i < f.eventWorkers; i++ {
+		f.eventWG.Add(1)
+		go f.eventWorker()
+	}
+}
+
+// Stop 停止风险事件持久化：关闭工作队列，等 worker 把已入队事件写完。
+//
+// 不先排空就退出进程会丢掉 channel 里最多 1024 条事件及其向量快照——这些正是
+// `risk_engine.enabled` 打开时 API 要读的读数。幂等，且必须在关库之前调用。
+func (f *Facts) Stop() {
+	f.eventStopOnce.Do(func() {
+		f.mu.Lock()
+		f.stopped = true
+		close(f.eventCh)
+		f.mu.Unlock()
+		f.eventWG.Wait()
 	})
 }
 
 // eventWorker 从 eventCh 读取事件并持久化到数据库。
 func (f *Facts) eventWorker() {
+	defer f.eventWG.Done()
 	for ev := range f.eventCh {
 		if err := f.db.InsertEvent(ev.ip, ev.eventType, ev.increment, 0); err != nil {
 			f.logger.Warn("risk event persist failed", "ip", ev.ip, "error", err)
@@ -270,7 +288,7 @@ func (f *Facts) RecordFailure(addr netip.Addr) {
 	e.pending += f.penalty
 
 	// 多维风险引擎：记录失败事件（feature flag 控制）
-	if f.riskEngine != nil {
+	if f.riskEngine != nil && !f.stopped {
 		ip := key(addr)
 		f.riskEngine.RecordEvent(ip, risk.EventFailure, 1.0)
 		// 异步持久化到数据库（不阻塞主链路）
@@ -284,7 +302,7 @@ func (f *Facts) RecordFailure(addr netip.Addr) {
 	}
 	f.mu.Unlock()
 	// 逐出落盘在锁外执行，避免持锁期间做 DB I/O 阻塞其他缓存操作
-	if evicted != nil && evicted.pending > 0 {
+	if evicted != nil {
 		f.writeBack(evicted)
 	}
 }
@@ -299,6 +317,12 @@ func (f *Facts) RecordRiskEvent(addr netip.Addr, eventType risk.EventType, incre
 	}
 	ip := key(addr)
 	f.riskEngine.RecordEvent(ip, eventType, increment)
+	// 发送与 Stop 的关闭共用 f.mu：否则 Stop 关掉 channel 后仍可能有一条事件发进来。
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stopped {
+		return
+	}
 	// 异步持久化，使用有界 channel 防止高流量下内存耗尽
 	select {
 	case f.eventCh <- riskEvent{ip: ip, eventType: eventType, increment: increment}:
@@ -330,7 +354,7 @@ func (f *Facts) ReputationScore(addr netip.Addr) uint32 {
 	f.loadScoreLocked(e)
 	score := e.score
 	f.mu.Unlock()
-	if evicted != nil && evicted.pending > 0 {
+	if evicted != nil {
 		f.writeBack(evicted)
 	}
 	return score
@@ -343,7 +367,7 @@ func (f *Facts) PriorBanCount(addr netip.Addr) uint32 {
 	f.loadBansLocked(e)
 	bans := e.bans
 	f.mu.Unlock()
-	if evicted != nil && evicted.pending > 0 {
+	if evicted != nil {
 		f.writeBack(evicted)
 	}
 	return bans
@@ -366,7 +390,7 @@ func (f *Facts) NoteBan(addr netip.Addr) {
 		e.score = 0
 	}
 	f.mu.Unlock()
-	if evicted != nil && evicted.pending > 0 {
+	if evicted != nil {
 		f.writeBack(evicted)
 	}
 	// 封禁也是风险维度之一；引擎未启用时 RecordRiskEvent 是空操作。
@@ -418,16 +442,35 @@ func (f *Facts) writeAll(dirty []*factsEntry) error {
 }
 
 // writeBack 是逐出路径上的同步落盘（容量已满时才走到，摊薄后仍是一次/条）。
-// 写失败时把条目重新插入缓存，让后续周期 flush 重试，避免丢待落盘数据。
+// 写失败时把条目重新放回缓存，让后续周期 flush 重试，避免丢待落盘数据。
+//
+// pending 的读写都在锁内：被逐出的条目可能已被刷盘协程摘进脏表，也可能在落盘期间
+// 因同一个 IP 再次出现而被新建条目接管——两条路径都会碰同一份 pending。
 func (f *Facts) writeBack(e *factsEntry) {
+	f.mu.Lock()
 	n := e.pending
 	e.pending = 0
+	f.mu.Unlock()
+	if n == 0 {
+		return
+	}
 	if err := f.writeN(e.ip, n); err != nil {
 		f.logger.Warn("逐出时信誉分落盘失败，重新入队等待重试", "ip", e.ip, "error", err)
-		e.pending = n
 		f.mu.Lock()
-		// 仅当该 IP 不在缓存中时重新插入（可能已被其他路径重新创建）
-		if _, exists := f.index[e.ip]; !exists {
+		// 该 IP 可能已被其他路径重新创建：把欠账并进现存的条目，而不是挂在一条
+		// 已不在索引里的对象上——后者会让这部分扣分永远不再落盘。
+		if cur, exists := f.index[e.ip]; exists {
+			ce := cur.Value.(*factsEntry)
+			f.loadScoreLocked(ce)
+			ce.pending += n
+			if ce.score > n {
+				ce.score -= n
+			} else {
+				ce.score = 0
+			}
+			f.lru.MoveToFront(cur)
+		} else {
+			e.pending = n
 			f.index[e.ip] = f.lru.PushFront(e)
 		}
 		f.mu.Unlock()
