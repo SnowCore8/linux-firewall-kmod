@@ -233,6 +233,9 @@ func NewEventPump(deps PumpDeps) (*EventPump, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if deps.Directives == nil {
+		logger.Warn("EventPump: Directives channel is nil, kernel directives will be dropped")
+	}
 	cache := deps.Cache
 	if cache == nil {
 		cache = bans.GlobalCache()
