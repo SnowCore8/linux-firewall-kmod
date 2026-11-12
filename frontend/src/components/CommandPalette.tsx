@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Input, Modal, Tag, Typography, type InputRef } from 'antd'
 import {
   EnterOutlined,
@@ -198,10 +198,11 @@ export function CommandPalette({ open, onClose, onRefresh }: CommandPaletteProps
   // 若仍用 filtered[active] 执行，Enter 会跑到另一条命令上（防火墙控制台里可能误触登出/封禁）。
   const ordered = useMemo(() => grouped.flatMap((s) => s.items), [grouped])
 
-  const runActive = () => {
-    const cmd = ordered[active]
+  const runActive = useCallback(() => {
+    const cmd = ordered[Math.min(active, ordered.length - 1)]
     if (cmd) cmd.run()
-  }
+    onClose()
+  }, [active, ordered, onClose])
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
     if (e.key === 'ArrowDown') {

@@ -13,6 +13,7 @@ from .config import DAEMON_PATH, PROC_BANS
 from .conftest import (
     ban_ip_permanent,
     count_bans,
+    free_tcp_port,
     ip_is_banned,
     mark_daemon_launched,
     unban_ip,
@@ -146,7 +147,7 @@ CREATE INDEX idx_is_active ON permanent_banlist(is_active);
         config = {
             "defaults": {
                 "max_retries": 3, "findtime": 600, "ban_time": 300,
-                "interval": 1, "metrics_port": 9123,
+                "interval": 1, "metrics_port": free_tcp_port(),
             },
             "jails": {
                 "sshd": {

@@ -120,6 +120,7 @@ export default function Logs() {
   modeRef.current = mode
   const viewerRef = useRef<HTMLDivElement>(null)
   const mountedRef = useRef(true)
+  const statusAbortRef = useRef<AbortController | null>(null)
 
   // 暂停期间每秒把 missedRef 批量同步到 missed state 一次；恢复接收（paused→false）即停表。
   // 于是「暂停时高频丢行」只引起每秒一次重渲染，而不是每条丢弃各渲染一次。
@@ -132,10 +133,12 @@ export default function Logs() {
   // 卸载保护：异步回调在组件卸载后不应触发状态更新。
   // StrictMode 下 effect 会 mount→unmount→mount，重挂载必须把标志复位，
   // 否则第一次卸载后它就永远为 false，后续所有异步回调都被静默丢弃。
+  // 同时中断在途的 getSseStatus 探测请求，避免组件卸载后请求仍在后台完成。
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      statusAbortRef.current?.abort()
     }
   }, [])
 
@@ -221,6 +224,7 @@ export default function Logs() {
   const connect = useCallback(() => {
     closeStream()
     setLiveState(attemptsRef.current === 0 ? 'connecting' : 'reconnecting')
+    statusAbortRef.current = new AbortController()
     const es = new EventSource(logsStreamUrl())
     esRef.current = es
 
@@ -273,7 +277,7 @@ export default function Logs() {
       closeStream()
       if (modeRef.current !== 'live') return
       setLiveState('reconnecting')
-      void getSseStatus()
+      void getSseStatus(statusAbortRef.current?.signal)
         .then((status) => {
           if (!mountedRef.current || modeRef.current !== 'live') return
           if (status.logs.limit_reached) {

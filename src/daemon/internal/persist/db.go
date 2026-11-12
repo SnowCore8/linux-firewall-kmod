@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sync"
 	"time"
 
@@ -11,6 +12,9 @@ import (
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/risk"
 )
+
+// validName 校验 SQL 标识符（表名/列名），防止 ALTER TABLE 拼接注入。
+var validName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 type DB struct {
 	conn   *sql.DB
@@ -192,6 +196,9 @@ func (db *DB) migrate() error {
 // 普通占位符传（与下面那条 ALTER 里只能拼接的标识符不同——标识符不是值，绑定不了，
 // 所以那里的三个实参必须是调用方写死的常量，不接受任何来自配置的字符串）。
 func (db *DB) ensureColumn(table, column, definition string) error {
+	if !validName.MatchString(table) || !validName.MatchString(column) {
+		return fmt.Errorf("invalid identifier: table=%q column=%q", table, column)
+	}
 	rows, err := db.conn.Query(`SELECT name FROM pragma_table_info(?)`, table)
 	if err != nil {
 		return fmt.Errorf("inspect table %s: %w", table, err)

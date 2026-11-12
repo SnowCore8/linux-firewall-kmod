@@ -134,12 +134,21 @@ func (c *FeedCache) Merge(newEntries []FeedEntry) {
 	// 同一 IP 常被多个源重复收录（IPsum/FireHOL/DShield 大量重叠），而各源并发刷新、
 	// 结果到达顺序不确定。若按键直接覆盖，最终置信度取决于 goroutine 谁先跑完；
 	// 因此冲突时只让更高置信度的条目胜出，相等则保留先到的，保证结果与顺序无关。
+	//
+	// 增量构建 CIDR 索引：entryKey 返回的 isCIDR/bits 在此处收集，避免替换后全量重建。
+	newCIDR := make(map[uint8]map[string]*FeedEntry)
 	for i := range newEntries {
 		e := &newEntries[i]
-		key, _, _ := entryKey(e.IP)
+		key, isCIDR, bits := entryKey(e.IP)
 		if existing, ok := merged[key]; ok {
 			if e.Confidence > existing.Confidence {
 				merged[key] = e
+				if isCIDR {
+					if newCIDR[bits] == nil {
+						newCIDR[bits] = make(map[string]*FeedEntry)
+					}
+					newCIDR[bits][key] = e
+				}
 			}
 			continue
 		}
@@ -147,11 +156,42 @@ func (c *FeedCache) Merge(newEntries []FeedEntry) {
 			break
 		}
 		merged[key] = e
+		if isCIDR {
+			if newCIDR[bits] == nil {
+				newCIDR[bits] = make(map[string]*FeedEntry)
+			}
+			newCIDR[bits][key] = e
+		}
 	}
 
-	// 替换并更新统计
+	// 替换并增量更新 CIDR 索引：保留旧桶中未被替换的条目，合并新条目。
 	c.entries = merged
-	c.rebuildIndexLocked()
+	for bits, entries := range newCIDR {
+		if c.cidr[bits] == nil {
+			c.cidr[bits] = make(map[string]*FeedEntry)
+		}
+		for k, v := range entries {
+			c.cidr[bits][k] = v
+		}
+	}
+	// 清理已过期条目留下的空桶
+	for bits, entries := range c.cidr {
+		for k := range entries {
+			if _, ok := merged[k]; !ok {
+				delete(entries, k)
+			}
+		}
+		if len(entries) == 0 {
+			delete(c.cidr, bits)
+		}
+	}
+	// 重建 cidrLens（前缀长度列表）
+	lens := make([]uint8, 0, len(c.cidr))
+	for bits := range c.cidr {
+		lens = append(lens, bits)
+	}
+	sort.Slice(lens, func(i, j int) bool { return lens[i] < lens[j] })
+	c.cidrLens = lens
 	c.stats.TotalEntries = len(merged)
 	c.stats.LastUpdate = time.Now()
 	c.mu.Unlock()

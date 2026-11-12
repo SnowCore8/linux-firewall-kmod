@@ -150,9 +150,13 @@ func (s *Server) connectionLimiter(next http.Handler) http.Handler {
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
+	body, err := json.Marshal(data)
+	if err != nil {
+		slog.Error("json marshal failed", "error", err)
+		http.Error(w, `{"code":50000,"message":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		slog.Error("encode JSON response", "error", err)
-	}
+	w.Write(body)
 }

@@ -247,10 +247,10 @@ type RiskEngineConfig struct {
 	Weights map[string]float64
 }
 
-// DefaultRiskEngineConfig 返回风险引擎默认配置（默认关闭）。
+// DefaultRiskEngineConfig 返回风险引擎默认配置（默认开启）。
 func DefaultRiskEngineConfig() RiskEngineConfig {
 	return RiskEngineConfig{
-		Enabled:      false,
+		Enabled:      true,
 		HalfLifeDays: 7.0,
 		Weights:      nil,
 	}

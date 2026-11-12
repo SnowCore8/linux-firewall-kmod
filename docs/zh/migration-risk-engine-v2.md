@@ -39,8 +39,8 @@ risk_engine:
 
 ### Feature Flag
 
-- `risk_engine.enabled = false`（默认）：使用旧单维度模型
-- `risk_engine.enabled = true`：使用新多维风险引擎
+- `risk_engine.enabled = true`（默认）：使用新多维风险引擎
+- `risk_engine.enabled = false`：使用旧单维度模型
 
 ## 数据库迁移
 

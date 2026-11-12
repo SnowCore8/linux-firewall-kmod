@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import { Card, Flex, Skeleton, Typography } from 'antd'
 import type { NavIcon } from '../app/nav.ts'
 
@@ -63,11 +63,24 @@ export function StatCard({
 }: StatCardProps) {
   const color = TONE_VAR[tone]
   const iconBg = TONE_BG[tone]
+  const interactiveProps = onClick
+    ? {
+        hoverable: true,
+        onClick,
+        role: 'button' as const,
+        tabIndex: 0,
+        onKeyDown: (e: KeyboardEvent) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onClick()
+          }
+        },
+      }
+    : {}
   return (
     <Card
       size="small"
-      hoverable={!!onClick}
-      onClick={onClick}
+      {...interactiveProps}
       styles={{ body: { padding: '16px 16px 16px 19px' } }}
       style={{
         cursor: onClick ? 'pointer' : 'default',

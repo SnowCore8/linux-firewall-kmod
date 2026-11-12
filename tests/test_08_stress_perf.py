@@ -1,5 +1,6 @@
 """08 - 压力/性能测试"""
 
+import os
 import time
 
 import pytest
@@ -23,6 +24,18 @@ class TestStressPerf:
     def test_ban_performance(self, clean_bans):
         """8.1 封禁性能"""
         from .config import PROC_BANS
+
+        # 预热 5 次，让内核哈希表进入稳态
+        for i in range(5):
+            try:
+                PROC_BANS.write_text(f"10.99.{i // 256}.{i % 256}")
+            except (PermissionError, OSError):
+                pass
+        time.sleep(0.5)
+
+        # 记录系统负载，便于事后排查异常值
+        load_avg = os.getloadavg()
+        print(f"System load: {load_avg}")
 
         start = time.time()
 

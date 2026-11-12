@@ -7,6 +7,7 @@ package http
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
@@ -30,7 +31,11 @@ type ApiResponse struct {
 // 有人往载荷里塞了 channel 或 func——那是编译期之后、上线之前就该被用例抓住的装配错误，
 // 在写响应的最后一刻把它压成一条 500 反而藏住了现场。
 func SuccessEnvelope(data any) ApiResponse {
-	raw, _ := json.Marshal(data)
+	raw, err := json.Marshal(data)
+	if err != nil {
+		slog.Error("envelope marshal failed", "error", err)
+		raw = json.RawMessage("null")
+	}
 	return ApiResponse{
 		Code:    httpcontract.CodeOK,
 		Data:    raw,

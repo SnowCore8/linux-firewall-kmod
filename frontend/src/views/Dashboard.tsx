@@ -40,6 +40,7 @@ import type { StatsResponse } from '../api/types.ts'
  */
 
 const STAT_POLL_MS = 30_000
+const EMPTY_STATS = emptyStats()
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -54,7 +55,7 @@ export default function Dashboard() {
     refreshInterval: STAT_POLL_MS,
   })
 
-  const stats = live.value ?? emptyStats()
+  const stats = live.value ?? EMPTY_STATS
   const hasData = live.value != null
 
   // Top 复发攻击源：按累计封禁次数排名的复发榜（REST 独占，SSE 不推这个视图）

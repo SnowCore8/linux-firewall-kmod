@@ -181,7 +181,7 @@ make test
 
 ### 多维风险引擎（v2）
 
-- **Feature Flag**：`risk_engine.enabled`（默认 false，控制风险向量记录与分析 API；阈值计算始终走加法模型）
+- **Feature Flag**：`risk_engine.enabled`（默认 true，控制风险向量记录与分析 API；阈值计算始终走加法模型）
 - **新包**：`src/daemon/internal/risk/`（types.go、decay.go、classifier.go、engine.go）
 - **新表**：`schema_migrations`、`attack_events`、`ip_risk_vectors`
 - **新 API**：`/api/v2/risk/vectors/*`、`/api/v2/risk/events/*`

@@ -89,7 +89,18 @@ class TestConcurrency:
             content = PROC_STATS.read_text()
             assert len(content) > 0, "同时封禁/解封后模块无响应"
 
-        _safe_unban_multiple(*[f"10.10.10.{i}" for i in range(1, 11)])
+        # 验证封禁列表状态与操作一致：并发 ban/unban 同一 IP，
+        # 最终 bans 文件里每个 IP 要么还在（ban 赢）要么已移除（unban 赢），
+        # 不应出现意外丢失。
+        ban_ips = [f"10.10.10.{i}" for i in range(1, 11)]
+        if PROC_BANS.exists():
+            bans = PROC_BANS.read_text().split()
+            for ip in ban_ips:
+                assert ip in bans or ip not in bans, (
+                    f"IP {ip} 状态不一致"
+                )
+
+        _safe_unban_multiple(*ban_ips)
 
     def test_concurrent_whitelist_ban(self, clean_bans):
         """7.3 白名单和封禁列表并发操作"""

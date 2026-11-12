@@ -29,8 +29,13 @@ class TestBanUnban:
 
     def test_batch_ban(self, clean_bans):
         """3.2 批量封禁"""
+        import time
+
         ips = [f"203.0.113.{i}" for i in range(1, 11)]
         ban_multiple(*ips)
+        wait_procfs()
+        # 额外等待确保内核哈希表更新
+        time.sleep(0.3)
 
         count = count_bans()
         assert count >= 10, f"批量封禁 10 个 IP，实际 {count} 个"

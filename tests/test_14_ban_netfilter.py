@@ -1,11 +1,9 @@
 """14 - 黑名单 IP netfilter 封禁测试"""
 
-import time
-
 import pytest
 
 from .config import PROC_BANS, PROC_STATS, TEST_IP
-from .conftest import get_stat, ip_is_banned, wait_procfs
+from .conftest import get_stat, ip_is_banned, wait_procfs, wait_until
 
 
 class TestBanNetfilter:
@@ -26,7 +24,7 @@ class TestBanNetfilter:
     def test_ban_entry_format(self, clean_bans):
         """14.2 netfilter 封禁条目格式"""
         PROC_BANS.write_text(TEST_IP)
-        time.sleep(1)
+        wait_until(lambda: ip_is_banned(TEST_IP), timeout=5)
 
         content = PROC_BANS.read_text()
         lines = [l for l in content.splitlines() if TEST_IP in l]
@@ -37,7 +35,7 @@ class TestBanNetfilter:
         before_bans = get_stat("current_bans")
 
         PROC_BANS.write_text(TEST_IP)
-        time.sleep(1)
+        wait_until(lambda: ip_is_banned(TEST_IP), timeout=5)
 
         after_bans = get_stat("current_bans")
         assert after_bans > before_bans, (
@@ -45,7 +43,7 @@ class TestBanNetfilter:
         )
 
         PROC_BANS.write_text(f"unban {TEST_IP}")
-        time.sleep(1)
+        wait_until(lambda: not ip_is_banned(TEST_IP), timeout=5)
 
         final_bans = get_stat("current_bans")
         assert final_bans <= before_bans + 1, (

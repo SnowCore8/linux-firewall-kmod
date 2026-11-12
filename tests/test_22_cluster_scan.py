@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 from .config import DAEMON_PATH
-from .conftest import mark_daemon_launched
+from .conftest import free_tcp_port, mark_daemon_launched
 
 # 触发封禁的失败行：单个 IP 只出现一次，故单 IP 阈值不可能被触及。
 CLUSTER_PATTERN = r"probe from (?P<ip>\d+\.\d+\.\d+\.\d+)"
@@ -67,7 +67,7 @@ class TestClusterScan:
                 "findtime": 600,
                 "ban_time": 300,
                 "interval": 1,
-                "metrics_port": 9123,
+                "metrics_port": free_tcp_port(),
             },
             "jails": {
                 "probe": {

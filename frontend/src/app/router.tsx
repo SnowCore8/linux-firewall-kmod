@@ -29,8 +29,15 @@ const Settings = lazy(() => import('../views/Settings.tsx'))
 
 /** 未登录时重定向到登录页；已登录访问 /login 由 Login 自身跳回概览。 */
 function RequireAuth({ children }: { children: ReactElement }): ReactElement {
-  const { isAuthenticated } = useAuth()
+  const { status, isAuthenticated } = useAuth()
   const location = useLocation()
+  if (status === 'authenticating') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}>
+        <span>正在验证身份…</span>
+      </div>
+    )
+  }
   if (!isAuthenticated) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
   }

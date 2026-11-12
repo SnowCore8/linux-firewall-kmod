@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 5 | 4 | 1 |
-| HIGH | 68 | 67 | 0 |
-| MEDIUM | 152 | 100 | 41 |
-| LOW | 132 | 34 | 97 |
-| **合计** | **357** | **205** | **139** |
+| HIGH | 83 | 67 | 15 |
+| MEDIUM | 192 | 100 | 81 |
+| LOW | 177 | 34 | 142 |
+| **合计** | **457** | **205** | **239** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -551,14 +551,96 @@
 - **问题**: bans/whitelist/config 写入口只依赖文件权限 0600，未像 netlink 路径那样检查 `capable(CAP_SYS_ADMIN)`
 - **状态**: ✅ 已修复 — 在 bans_write、whitelist_write、config_write 入口添加 `if (!capable(CAP_SYS_ADMIN)) return -EPERM;`
 
-### H-68 🔴 测试直接修改源配置且无崩溃恢复
+### H-68 🟢 测试直接修改源配置且无崩溃恢复
 - **文件**: `tests/test_17_config_reload.py:124-166`
 - **问题**: 修改仓库源码目录中的 `default.yaml`，pytest 被 SIGKILL 时配置永久损坏
-- **修复**: 使用 `tmp_path` 副本 + daemon `-c` 参数，或在 fixture 中增加 `try/finally` 确保恢复
+- **状态**: ✅ 已修复 — 同 H-57，使用 `tmp_path` + `try/finally`
+
+### 第三轮扫描补充（HIGH 5 项）
+
+### H-69 🔴 SuccessEnvelope 忽略 json.Marshal 错误
+- **文件**: `src/daemon/internal/http/envelope.go:33`
+- **问题**: `json.Marshal(data)` 的错误被显式忽略，序列化失败时 `Data` 字段序列化为 `null`，客户端收到 `code:0, data:null` 的"成功"响应，数据已丢失但无报错
+- **影响**: 分析面 handler 返回复杂嵌套结构时可能静默丢失数据
+- **修复**: 至少记录 `slog.Error` 日志；或改为返回 `(ApiResponse, error)` 让调用方回 500
+
+### H-70 🔴 writeJSON Encode 失败后客户端收到截断 JSON
+- **文件**: `src/daemon/internal/http/server.go:155-157`
+- **问题**: `json.NewEncoder(w).Encode(data)` 的写入错误仅记录日志，HTTP 状态码已写出，客户端收到截断的 JSON 响应体
+- **影响**: 客户端无法解析响应但也收不到错误码
+- **修复**: 使用 `json.Marshal` 预序列化来避免半写状态
+
+### H-71 🔴 ensureColumn SQL 注入脆弱设计
+- **文件**: `src/daemon/internal/persist/db.go:216`
+- **问题**: `ALTER TABLE` 使用 `fmt.Sprintf` 拼接表名和列名，当前安全但未来维护者可能引入用户可控输入
+- **影响**: 潜在的 SQL 注入风险
+- **修复**: 添加启动期校验，确保 table/column 名仅包含字母数字和下划线
+
+### H-72 🔴 threatfeeds Cache.Merge 忽略 entryKey 返回值
+- **文件**: `src/daemon/internal/threatfeeds/cache.go:139`
+- **问题**: `entryKey(e.IP)` 返回的 `isCIDR` 和 `bits` 被忽略，每次 Merge 都要全表重建 CIDR 索引
+- **影响**: 接近 100 万条时性能开销显著
+- **修复**: 增量更新 CIDR 索引而非全量重建
+
+### H-73 🔴 EventPump Directives 为 nil 时静默丢弃内核指令
+- **文件**: `src/daemon/internal/kernel/consumer.go:196-200`
+- **问题**: `PumpDeps.Directives` channel 为 nil 时 CONFIG_CHANGE 和封禁下发被拒只记日志，组合根装配遗漏时所有内核反向指令被静默丢弃
+- **影响**: 配置变更不生效但面板显示成功，生产环境难以诊断
+- **修复**: 在 `NewEventPump` 构造时对关键依赖做 nil 检查并打 Warn 级别日志
+
+### H-74 🔴 测试端口硬编码冲突（test_22 与 test_12）
+- **文件**: `tests/test_22_cluster_scan.py:70`, `tests/test_12_permanent_ban.py:149`
+- **问题**: 两个测试文件都将 `metrics_port` 硬编码为 `9123`，顺序运行时 TIME_WAIT 状态导致绑定失败
+- **修复**: 统一使用 `free_tcp_port()` 动态分配端口
+
+### H-75 🔴 并发 ban/unban 测试缺少最终状态一致性验证
+- **文件**: `tests/test_07_concurrency.py:69-92`
+- **问题**: `test_concurrent_ban_unban` 仅验证 `PROC_STATS` 非空，未验证封禁列表最终状态是否与操作序列一致
+- **修复**: 增加最终状态断言：验证 `current_bans` 等于预期值
+
+### H-76 🔴 test_14 使用固定 sleep 而非轮询等待内核状态
+- **文件**: `tests/test_14_ban_netfilter.py:28-49`
+- **问题**: 三个测试用例使用 `time.sleep(1)` 等待内核状态更新，高负载时不足、低负载时浪费
+- **修复**: 改用 `wait_until` 轮询，设置合理超时
+
+### H-77 🔴 性能测试缺少预热阶段和系统负载感知
+- **文件**: `tests/test_08_stress_perf.py:23-41`
+- **问题**: 直接测量 50 次封禁耗时，无预热步骤，未记录系统负载，不同 CI 环境结果不可复现
+- **修复**: 增加 3-5 次预热写入，附带系统负载信息
+
+### H-78 🔴 批量封禁测试写入后未等待 procfs 同步即断言
+- **文件**: `tests/test_03_ban_unban.py:30-38`
+- **问题**: `test_batch_ban` 调用 `ban_multiple` 后立即 `count_bans()` 断言，内核哈希表与 procfs 文件刷新存在竞态
+- **修复**: 在 `count_bans()` 前增加 `wait_procfs()` 或使用 `wait_until` 轮询
+
+### H-79 🔴 CommandPalette active 索引越界导致 Enter 执行空操作
+- **文件**: `frontend/src/components/CommandPalette.tsx:201-203`
+- **问题**: `filtered` 列表缩短后 `active` 可能越界，`runActive()` 读取 `ordered[active]` 得到 `undefined`，静默丢失按键
+- **修复**: `const cmd = ordered[Math.min(active, ordered.length - 1)]`
+
+### H-80 🔴 Dashboard emptyStats() 每次渲染返回新引用导致 useMemo 失效
+- **文件**: `frontend/src/views/Dashboard.tsx:57`
+- **问题**: `live.value` 为 null 时每次渲染调用 `emptyStats()` 返回新对象引用，所有图表 `useMemo` 全部失效重建
+- **修复**: 将 `emptyStats()` 返回值缓存为模块级常量
+
+### H-81 🔴 AuthProvider 初始加载时过期令牌导致受保护内容闪现
+- **文件**: `frontend/src/providers/AuthProvider.tsx:57-59`, `frontend/src/app/router.tsx:31-38`
+- **问题**: localStorage 中存在过期令牌时，`AuthProvider` 直接设为 `authenticated`，`RequireAuth` 放行渲染，直到首个 API 返回 401 才跳回登录页
+- **修复**: 增加 `probeAuth` 探测步骤，引入 `authenticating` 初始状态
+
+### H-82 🔴 Logs.tsx 日志流 getSseStatus 未传 AbortSignal
+- **文件**: `frontend/src/views/Logs.tsx:276`
+- **问题**: 日志流的 `onerror` 中 `getSseStatus()` 未传入 AbortSignal，组件卸载时请求不会被中断
+- **修复**: 仿照 `useSse.ts` 创建 AbortController ref
+
+### H-83 🔴 StatCard 可点击时缺少无障碍属性
+- **文件**: `frontend/src/components/StatCard.tsx:67-78`
+- **问题**: 传入 `onClick` 时 Card 变为可点击但缺少 `role="button"`、`tabIndex={0}` 和 `onKeyDown`，键盘用户无法操作
+- **修复**: 添加 `role="button"`、`tabIndex={0}`、`onKeyDown` 处理 Enter/Space
 
 ---
 
-## MEDIUM 级（152 项）
+## MEDIUM 级（172 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -788,10 +870,34 @@
 | M-114 | `tests/test_22_cluster_scan.py:27` | `DETECT_WAIT_SECONDS = 25` 硬编码，CI 高负载可能不够，且整体耗时超 50 秒无 slow 标记 | 🔴 |
 | M-115 | `tests/test_21_multi_jail.py:69` | 启动 daemon 后固定 `time.sleep(2)` 未验证是否真的启动成功 | 🔴 |
 
+### 第三轮扫描补充（MEDIUM 20 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-116 | `daemon/internal/http/envelope.go:33` | `json.Marshal(data)` 错误被忽略，序列化失败时 `Data` 为 `null`，客户端收到假成功 | 🔴 |
+| M-117 | `daemon/internal/http/server.go:155-157` | `writeJSON` Encode 失败后客户端收到截断 JSON，状态码已写出无法回退 | 🔴 |
+| M-118 | `daemon/internal/persist/db.go:216` | `ensureColumn` 用 `fmt.Sprintf` 拼接 SQL，当前安全但设计脆弱 | 🔴 |
+| M-119 | `daemon/internal/threatfeeds/cache.go:139` | `Merge` 忽略 `entryKey` 返回值，每次全表重建 CIDR 索引 | 🔴 |
+| M-120 | `daemon/internal/http/logs.go:62-66` | `GetLogs` 两遍扫描间文件可能轮转，导致 `totalLines` 与 `items` 不一致 | 🔴 |
+| M-121 | `daemon/internal/http/logs.go:289-300` | `tailLogs` 的 `file.Close()` 失败仅 Warn，文件句柄可能泄漏 | 🔴 |
+| M-122 | `daemon/internal/bans/cache.go:195-207` | `IsPending` 在读路径中隐式清理过期条目，语义不一致 | 🔴 |
+| M-123 | `daemon/internal/persist/retry_queue.go:193` | `Stop()` 的 `flush` 用 `context.Background()` 无超时，DB 不健康时阻塞关停 | 🔴 |
+| M-124 | `daemon/internal/runtime/executor.go:66-70` | 溢出补读单源连续读满 16 MiB，其他源 inotify 事件堆积 | 🔴 |
+| M-125 | `daemon/internal/http/sse.go:246-249` | `register` 分支 `stopped` 时 `return` 而非 `continue`，剩余消息不处理 | 🔴 |
+| M-126 | `tests/test_12_permanent_ban.py:165-169` | daemon stdout/stderr 重定向 DEVNULL，启动失败无法诊断 | 🔴 |
+| M-127 | `tests/test_20_daemon_lifecycle.py:76-81` | `daemon_process` fixture 用 DEVNULL 丢失错误输出 | 🔴 |
+| M-128 | `tests/test_17_config_reload.py:135-137` | 配置修改依赖脆弱字符串替换，静默失败时测试虚假通过 | 🔴 |
+| M-129 | `tests/test_04_whitelist.py:107-132` | 白名单容量测试所有写入失败时断言退化恒成立 | 🔴 |
+| M-130 | `tests/test_04_whitelist.py:95-105` | 白名单格式验证依赖内核抛异常，静默忽略时测试失败 | 🔴 |
+| M-131 | `tests/test_07_concurrency.py` 等 | 并发/压力测试仅覆盖 IPv4，IPv6 路径未验证 | 🔴 |
+| M-132 | `tests/test_04_whitelist.py:51-76` | 白名单保护测试未验证 `whitelist_add` 是否真正生效 | 🔴 |
+| M-133 | `tests/test_13_frp_jail.py:61` | FRP 测试硬编码端口 9119 且未检查外部 daemon | 🔴 |
+| M-134 | `tests/test_17_config_reload.py:47-65` | `backup_config` fixture 与测试 finally 重复发送 SIGHUP | 🔴 |
+| M-135 | `tests/test_12_permanent_ban.py:37-44` | 永久封禁测试观察窗口过短，未真正验证不过期 | 🔴 |
+
 
 ---
 
-## LOW 级（132 项）
+## LOW 级（152 项）
 
 ### 内核模块（6 项）
 | # | 文件 | 问题 |

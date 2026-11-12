@@ -55,7 +55,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>(() =>
-    hasAccessToken() ? 'authenticated' : 'unauthenticated',
+    hasAccessToken() ? 'authenticating' : 'unauthenticated',
   )
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -92,6 +92,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
     }, 1000)
   }, [clearLockoutTimer])
+
+  // 初始令牌探测：localStorage 中存在令牌时先验证有效性，过期则直接标 unauthenticated，
+  // 避免受保护内容在探测完成前闪现
+  useEffect(() => {
+    if (status !== 'authenticating') return
+    const token = localStorage.getItem(ACCESS_TOKEN_KEY)
+    if (!token) {
+      setStatus('unauthenticated')
+      return
+    }
+    probeAuth()
+      .then(() => setStatus('authenticated'))
+      .catch(() => {
+        clearAccessToken()
+        setStatus('unauthenticated')
+      })
+  }, [status])
 
   // 401 自动登出：任何在途请求收到 401 都会广播到这里
   useEffect(() => {
