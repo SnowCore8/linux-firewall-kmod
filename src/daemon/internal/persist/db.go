@@ -1,6 +1,7 @@
 package persist
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,10 @@ import (
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/risk"
 )
+
+// queryTimeout 是单条查询的执行超时。busy_timeout 只处理锁竞争超时，不处理查询本身的
+// 执行超时；主链路上的读写操作需要这个额外的安全网，防止一条慢查询钉住判定路径。
+const queryTimeout = 5 * time.Second
 
 // validName 校验 SQL 标识符（表名/列名），防止 ALTER TABLE 拼接注入。
 var validName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
@@ -79,6 +84,11 @@ func NewDB(cfg Config) (*DB, error) {
 
 func (db *DB) Close() error {
 	return db.conn.Close()
+}
+
+// queryCtx 返回带执行超时的上下文，供主链路上的数据库操作使用。
+func (db *DB) queryCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), queryTimeout)
 }
 
 func (db *DB) migrate() error {

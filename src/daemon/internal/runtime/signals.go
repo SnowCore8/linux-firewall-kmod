@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -84,7 +85,9 @@ func (s *SignalSource) pump() {
 			}
 			// 非阻塞写：管道满说明还有未消费的信号，丢掉这一次等价于内核把同类
 			// 信号合并，语义上无损（消费端每次唤醒都会把存量读空）。
-			_, _ = unix.Write(s.w, []byte{signalByte(kind)})
+			if _, err := unix.Write(s.w, []byte{signalByte(kind)}); err != nil {
+				slog.Debug("信号写入管道失败", "error", err)
+			}
 		}
 	}
 }

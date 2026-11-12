@@ -49,7 +49,9 @@ func (db *DB) GetBanHistory(ip string) (*BanHistory, error) {
 func (db *DB) RecordBanHistory(ip string, isPermanent bool) (int, error) {
 	now := time.Now().Unix()
 	var count int
-	err := db.conn.QueryRow(
+	ctx, cancel := db.queryCtx()
+	defer cancel()
+	err := db.conn.QueryRowContext(ctx,
 		`INSERT INTO ban_history (ip, ban_count, last_banned_at, is_permanent, created_at)
 		 VALUES (?, 1, ?, ?, ?)
 		 ON CONFLICT(ip) DO UPDATE SET 

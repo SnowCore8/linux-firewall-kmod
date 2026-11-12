@@ -44,7 +44,9 @@ func (db *DB) GetIPReputation(ip string) (*IPReputation, error) {
 		rep                  IPReputation
 		lastFailure, lastBan sql.NullInt64
 	)
-	err := db.conn.QueryRow(
+	ctx, cancel := db.queryCtx()
+	defer cancel()
+	err := db.conn.QueryRowContext(ctx,
 		`SELECT `+reputationColumns+`
 		 FROM ip_reputation
 		 WHERE ip = ?`,
@@ -89,7 +91,9 @@ func (db *DB) RecordFailure(ip string, penalty int, count int) error {
 		count = 1
 	}
 	now := time.Now().Unix()
-	_, err := db.conn.Exec(
+	ctx, cancel := db.queryCtx()
+	defer cancel()
+	_, err := db.conn.ExecContext(ctx,
 		`INSERT INTO ip_reputation (ip, score, last_updated, last_failure, total_failures)
 		 VALUES (?, MAX(0, 100 - ?), ?, ?, ?)
 		 ON CONFLICT(ip) DO UPDATE SET 
@@ -107,7 +111,9 @@ func (db *DB) RecordFailure(ip string, penalty int, count int) error {
 
 func (db *DB) RecordBan(ip string, penalty int) error {
 	now := time.Now().Unix()
-	_, err := db.conn.Exec(
+	ctx, cancel := db.queryCtx()
+	defer cancel()
+	_, err := db.conn.ExecContext(ctx,
 		`INSERT INTO ip_reputation (ip, score, last_updated, last_ban, total_bans)
 		 VALUES (?, MAX(0, 100 - ?), ?, ?, 1)
 		 ON CONFLICT(ip) DO UPDATE SET 

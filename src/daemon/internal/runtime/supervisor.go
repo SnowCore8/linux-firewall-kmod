@@ -1,6 +1,9 @@
 package runtime
 
-import "time"
+import (
+	"log/slog"
+	"time"
+)
 
 // StopOutcome 是单个执行体的关停结果。
 type StopOutcome int
@@ -62,6 +65,11 @@ func (s *Supervisor) Spawn(name string, token *Shutdown, body func()) {
 	s.executors = append(s.executors, executorEntry{name: name, token: token, done: done})
 	go func() {
 		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("执行体 goroutine panic，触发优雅关停", "name", name, "panic", r)
+			}
+		}()
 		body()
 	}()
 }

@@ -527,15 +527,21 @@ func run(args []string) error {
 				// 每段 5 秒的超时并记「执行体关停未在超时内完成」，端口在这 5 秒里
 				// 一直被占着，紧接着重启就撞 bind: address already in use。
 				serveDone := make(chan struct{})
+				var serveErr error
 				go func() {
 					defer close(serveDone)
-					if err := httpServer.Start(); err != nil {
-						logger.Error("HTTP 服务器异常退出", "error", err)
+					serveErr = httpServer.Start()
+					if serveErr != nil {
+						// 监听失败（端口占用等）必须传回主 goroutine 触发优雅关停，
+						// 否则错误只留在日志里，主 goroutine 对此一无所知。
+						logger.Error("HTTP 服务器启动失败", "error", serveErr)
+						requestStop(serveErr)
 					}
 				}()
 				select {
 				case <-serveDone:
-					// Start 自己返回了（监听侧故障），无需再关停一遍。
+					// Start 自己返回了（监听侧故障）；requestStop 已在 goroutine 内调用，
+					// 主 goroutine 正在走关停流程。
 				case <-httpToken.Done():
 					// 先断两条 SSE 流再关服务器：Shutdown 要等所有活跃连接变空闲，
 					// 而 SSE 连接永远不会空闲——顺序反了就只能等超时。
