@@ -214,12 +214,15 @@ func (q *RetryQueue) run() {
 	consecutiveFailures := 0
 	for {
 		backoff := q.backoff(consecutiveFailures)
+		timer := time.NewTimer(backoff)
 		select {
 		case <-q.stop:
+			timer.Stop()
 			return
 		case <-q.wake:
+			timer.Stop()
 			// 队列由空转非空，立即尝试一次。
-		case <-time.After(backoff):
+		case <-timer.C:
 			// 定时重试。
 		}
 		retried, failed := q.retryBatch()

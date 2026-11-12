@@ -279,7 +279,8 @@ func (f *Facts) touchLocked(ip string) (*factsEntry, *factsEntry) {
 	return e, evicted
 }
 
-// loadScoreLocked 把内存分对齐到库里的值（未知 IP 按满分起算）。
+// loadScoreLocked 标记条目已加载并设默认分（未知 IP 按满分起算）。
+// 数据库读取在锁外由 loadScoreFromDB 完成，避免持 f.mu 期间做 I/O。
 func (f *Facts) loadScoreLocked(e *factsEntry) {
 	if e.scoreLoaded {
 		return
@@ -287,6 +288,12 @@ func (f *Facts) loadScoreLocked(e *factsEntry) {
 	e.scoreLoaded = true
 	e.scoreLoadedAt = time.Now()
 	e.score = fullReputation
+}
+
+// loadScoreFromDB 在锁外读取信誉分并应用到条目。
+// 遵循 reloadScores 的公式：有效分 = clamp(库中分) - pending，保持「内存分 = 库分 - 待落盘量」。
+// 重新加锁后校验条目仍在索引中且未被替换，避免把过期读数套到新条目上。
+func (f *Facts) loadScoreFromDB(e *factsEntry) {
 	if f.db == nil {
 		return
 	}
@@ -295,17 +302,34 @@ func (f *Facts) loadScoreLocked(e *factsEntry) {
 		f.logger.Warn("读取信誉分失败，按满分处理", "ip", e.ip, "error", err)
 		return
 	}
+	dbScore := uint32(fullReputation)
 	if rep != nil {
-		e.score = clampScore(rep.Score)
+		dbScore = clampScore(rep.Score)
 	}
+	f.mu.Lock()
+	if cur, ok := f.index[e.ip]; ok && cur.Value.(*factsEntry) == e {
+		if e.pending > dbScore {
+			e.score = 0
+		} else {
+			e.score = dbScore - e.pending
+		}
+		e.scoreLoadedAt = time.Now()
+	}
+	f.mu.Unlock()
 }
 
-// loadBansLocked 读入历史封禁次数。
+// loadBansLocked 标记条目已加载封禁次数。
+// 数据库读取在锁外由 loadBansFromDB 完成，避免持 f.mu 期间做 I/O。
 func (f *Facts) loadBansLocked(e *factsEntry) {
 	if e.bansLoaded {
 		return
 	}
 	e.bansLoaded = true
+}
+
+// loadBansFromDB 在锁外读取封禁次数并应用到条目。
+// 重新加锁后校验条目仍在索引中且未被替换。
+func (f *Facts) loadBansFromDB(e *factsEntry) {
 	if f.db == nil {
 		return
 	}
@@ -314,9 +338,13 @@ func (f *Facts) loadBansLocked(e *factsEntry) {
 		f.logger.Warn("读取封禁历史失败，按零次处理", "ip", e.ip, "error", err)
 		return
 	}
-	if h != nil && h.BanCount > 0 {
-		e.bans = uint32(h.BanCount)
+	f.mu.Lock()
+	if cur, ok := f.index[e.ip]; ok && cur.Value.(*factsEntry) == e {
+		if h != nil && h.BanCount > 0 {
+			e.bans = uint32(h.BanCount)
+		}
 	}
+	f.mu.Unlock()
 }
 
 // reloadScores 把超过 reloadEvery 未对齐的条目重新对齐到库里的分数。
@@ -386,9 +414,21 @@ func (f *Facts) reloadScores() {
 
 // RecordFailure 记一次失败尝试：内存扣分并记入待落盘量。
 func (f *Facts) RecordFailure(addr netip.Addr) {
+	// 快速路径：标记条目并更新 LRU（持锁）。
 	f.mu.Lock()
 	e, evicted := f.touchLocked(key(addr))
 	f.loadScoreLocked(e)
+	f.mu.Unlock()
+
+	// 数据库读取在锁外完成，避免阻塞判定主链路。
+	f.loadScoreFromDB(e)
+
+	// 主路径：应用扣分（持锁）。
+	f.mu.Lock()
+	// 条目可能在解锁期间被逐出并替换，重新获取索引中的当前条目。
+	if cur, ok := f.index[key(addr)]; ok {
+		e = cur.Value.(*factsEntry)
+	}
 	if e.score > f.penalty {
 		e.score -= f.penalty
 	} else {
@@ -502,6 +542,13 @@ func (f *Facts) ReputationScore(addr netip.Addr) uint32 {
 	f.mu.Lock()
 	e, evicted := f.touchLocked(key(addr))
 	f.loadScoreLocked(e)
+	f.mu.Unlock()
+	// 数据库读取在锁外完成，避免阻塞判定主链路。
+	f.loadScoreFromDB(e)
+	f.mu.Lock()
+	if cur, ok := f.index[key(addr)]; ok {
+		e = cur.Value.(*factsEntry)
+	}
 	score := e.score
 	f.mu.Unlock()
 	if evicted != nil {
@@ -515,6 +562,13 @@ func (f *Facts) PriorBanCount(addr netip.Addr) uint32 {
 	f.mu.Lock()
 	e, evicted := f.touchLocked(key(addr))
 	f.loadBansLocked(e)
+	f.mu.Unlock()
+	// 数据库读取在锁外完成，避免阻塞判定主链路。
+	f.loadBansFromDB(e)
+	f.mu.Lock()
+	if cur, ok := f.index[key(addr)]; ok {
+		e = cur.Value.(*factsEntry)
+	}
 	bans := e.bans
 	f.mu.Unlock()
 	if evicted != nil {
@@ -529,8 +583,10 @@ func (f *Facts) PriorBanCount(addr netip.Addr) uint32 {
 // 这两笔都在缓存之外。不同步进来，缓存会继续报告封禁前的次数与分数，而渐进式时长恰好
 // 读的就是这个次数。扣分量不进 pending——库里那笔已经由 RecordBan 落好了。
 func (f *Facts) NoteBan(addr netip.Addr) {
+	ip := key(addr)
+	// 快速路径：标记条目并记录加载前状态（持锁）。
 	f.mu.Lock()
-	e, evicted := f.touchLocked(key(addr))
+	e, evicted := f.touchLocked(ip)
 	// 库侧的这次封禁已经由 RecordBanHistory/RecordBan 落好了，因此「本次封禁前是否
 	// 已经有内存读数」决定了要不要自增：
 	//   - 已加载的条目记的是封禁前的值，落库后库值比内存新一次，必须增量；
@@ -541,6 +597,21 @@ func (f *Facts) NoteBan(addr netip.Addr) {
 	hadBans := e.bansLoaded
 	f.loadScoreLocked(e)
 	f.loadBansLocked(e)
+	f.mu.Unlock()
+
+	// 数据库读取在锁外完成，避免阻塞判定主链路。
+	f.loadScoreFromDB(e)
+	f.loadBansFromDB(e)
+
+	// 主路径：应用封禁同步（持锁）。
+	f.mu.Lock()
+	// 条目可能在解锁期间被逐出并替换，重新获取索引中的当前条目。
+	if cur, ok := f.index[ip]; ok {
+		e = cur.Value.(*factsEntry)
+	}
+	// 重新检查加载状态：loadScoreFromDB/loadBansFromDB 可能已设置。
+	hadScore = hadScore || e.scoreLoaded
+	hadBans = hadBans || e.bansLoaded
 	if hadBans || f.db == nil {
 		e.bans++
 	}
@@ -603,8 +674,13 @@ func (f *Facts) writeAll(dirty []*factsEntry) error {
 			// 还账必须认索引里的现存条目：写库在锁外，期间本条可能已被逐出、同 IP 又
 			// 建了新条目，直接还给 e 会把扣分挂到一条不再被索引的孤儿上。
 			f.mu.Lock()
-			f.requeueLostLocked(e, n)
+			needLoad := f.requeueLostLocked(e, n)
 			f.mu.Unlock()
+			// 替代条目或重新挂回的条目需要在锁外从数据库加载真实分数，
+			// 避免持 f.mu 期间做 I/O。
+			if needLoad != nil {
+				f.loadScoreFromDB(needLoad)
+			}
 		}
 		f.dbMu.Unlock()
 	}
@@ -620,12 +696,15 @@ func (f *Facts) writeAll(dirty []*factsEntry) error {
 //   - 换成了替代条目：按 writeBack 同一口径把欠账并入（库里尚未包含这笔扣分，故重载
 //     库值后先减分再追加 pending，保持「内存分 = 库分 - 待落盘量」）；
 //   - 索引里没有：把 e 重新挂回，下一拍继续重试。
-func (f *Facts) requeueLostLocked(e *factsEntry, n uint32) {
+//
+// 返回需要从数据库加载分数的条目（替代条目或重新挂回的条目），调用方在锁外执行
+// loadScoreFromDB。同一条目直接追加 pending 无需重加载，返回 nil。
+func (f *Facts) requeueLostLocked(e *factsEntry, n uint32) *factsEntry {
 	if cur, exists := f.index[e.ip]; exists {
 		ce := cur.Value.(*factsEntry)
 		if ce == e {
 			e.pending += n
-			return
+			return nil
 		}
 		f.loadScoreLocked(ce)
 		ce.pending += n
@@ -635,10 +714,11 @@ func (f *Facts) requeueLostLocked(e *factsEntry, n uint32) {
 			ce.score = 0
 		}
 		f.lru.MoveToFront(cur)
-		return
+		return ce
 	}
 	e.pending += n
 	f.index[e.ip] = f.lru.PushFront(e)
+	return e
 }
 
 // writeBack 是逐出路径上的同步落盘（容量已满时才走到，摊薄后仍是一次/条）。
