@@ -92,9 +92,16 @@ static struct fw_rate_node *fw_rate_find_rcu(u8 af, const void *addr, u32 bkt) {
 }
 
 /* EWMA 定点更新：smoothed = (3 * cur + 7 * old) / 10
- * 先除后乘避免中间值溢出：(cur/10)*3 + (old/10)*7 */
+ * 先除后乘避免中间值溢出：(cur/10)*3 + (old/10)*7
+ * 饱和算术：当 (old/10)*7 即将溢出时钳到 U64_MAX，防止回绕使违规判定失效 */
 static inline u64 fw_ewma(u64 cur, u64 old) {
-  return (cur / FW_EWMA_DEN) * FW_EWMA_NUM + (old / FW_EWMA_DEN) * (FW_EWMA_DEN - FW_EWMA_NUM);
+  u64 c = cur / FW_EWMA_DEN;
+  u64 o = old / FW_EWMA_DEN;
+
+  /* (FW_EWMA_DEN - FW_EWMA_NUM) == 7；检测 o * 7 是否溢出 */
+  if (o > U64_MAX / (FW_EWMA_DEN - FW_EWMA_NUM))
+    return U64_MAX;
+  return c * FW_EWMA_NUM + o * (FW_EWMA_DEN - FW_EWMA_NUM);
 }
 
 /* 计数折算为「每秒」。溢出时退化为先除再乘，避免中间值回绕 */

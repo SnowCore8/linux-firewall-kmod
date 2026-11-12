@@ -595,16 +595,16 @@ static int stats_show(struct seq_file *m, void *v) {
 
   fw_stats_snapshot(&s);
 
-  seq_printf(m, "total_bans %u\n", (unsigned int)s.total_bans);
-  seq_printf(m, "total_unbans %u\n", (unsigned int)s.total_unbans);
-  seq_printf(m, "whitelist_rejects %u\n", (unsigned int)s.whitelist_rejects);
-  seq_printf(m, "ban_table_full_rejects %u\n", (unsigned int)s.ban_table_full_rejects);
-  seq_printf(m, "alloc_failures %u\n", (unsigned int)s.alloc_failures);
+  seq_printf(m, "total_bans %llu\n", (unsigned long long)s.total_bans);
+  seq_printf(m, "total_unbans %llu\n", (unsigned long long)s.total_unbans);
+  seq_printf(m, "whitelist_rejects %llu\n", (unsigned long long)s.whitelist_rejects);
+  seq_printf(m, "ban_table_full_rejects %llu\n", (unsigned long long)s.ban_table_full_rejects);
+  seq_printf(m, "alloc_failures %llu\n", (unsigned long long)s.alloc_failures);
   seq_printf(m, "packets_dropped %llu\n", (unsigned long long)s.packets_dropped);
   seq_printf(m, "packets_accepted %llu\n", (unsigned long long)s.packets_accepted);
   seq_printf(m, "tcp_anomaly_dropped %llu\n", (unsigned long long)s.tcp_anomaly_dropped);
-  seq_printf(m, "cleanup_cycles %u\n", (unsigned int)s.cleanup_cycles);
-  seq_printf(m, "cleanup_expired_total %u\n", (unsigned int)s.cleanup_expired_total);
+  seq_printf(m, "cleanup_cycles %llu\n", (unsigned long long)s.cleanup_cycles);
+  seq_printf(m, "cleanup_expired_total %llu\n", (unsigned long long)s.cleanup_expired_total);
   seq_printf(m, "current_bans %d\n", (int)fw_ban_count());
   seq_printf(m, "current_whitelist %d\n", (int)fw_wl_count());
   seq_printf(m, "recent_additions %u\n", fw_ban_recent_additions_stat());

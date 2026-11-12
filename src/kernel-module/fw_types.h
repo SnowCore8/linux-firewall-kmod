@@ -21,8 +21,12 @@
  *   stats 表锁      (spin_lock_bh，仅 flush/惰性建条目)
  *
  * 规则：
- *   - 除 rate_locks[bkt] → rate_slot_lock 这一对之外，任意两把锁**不得嵌套持有**；
- *     需要跨表操作时先释放再取。
+ *   - 允许的嵌套对（共两对）：
+ *       1. rate_locks[bkt] → rate_slot_lock：建速率条目时「探测空槽 + 发布」必须原子。
+ *       2. ban_bucket_lock → flood_lock：fw_ban_insert 持桶锁期间调用
+ *          fw_ban_flood_allow() 获取 flood_lock。flood_lock 必须是叶子锁，
+ *          其临界区内不得再获取任何锁，否则破坏此嵌套并引入死锁。
+ *   - 除上述两对外，任意两把锁**不得嵌套持有**；需要跨表操作时先释放再取。
  *   - 热路径（软中断）不持有其中任何一把（速率桶锁仅在建条目的冷路径取）。
  *   - 删除路径一律 hlist_del_rcu + call_rcu，锁只保护链表的增删与遍历边界。
  */
