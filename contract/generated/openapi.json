@@ -5107,6 +5107,18 @@
                 "type": "null"
               }
             ]
+          },
+          "risk_engine_enabled": {
+            "type": "boolean"
+          },
+          "threat_feeds_enabled": {
+            "type": "boolean"
+          },
+          "cluster_enabled": {
+            "type": "boolean"
+          },
+          "cluster_audit_only": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -5127,7 +5139,11 @@
           "max_ban_entries",
           "max_whitelist_entries",
           "max_rate_entries",
-          "max_local_ip_cache"
+          "max_local_ip_cache",
+          "risk_engine_enabled",
+          "threat_feeds_enabled",
+          "cluster_enabled",
+          "cluster_audit_only"
         ]
       },
       "UpdateConfigRequest": {
@@ -5347,6 +5363,46 @@
             "oneOf": [
               {
                 "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "risk_engine_enabled": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "threat_feeds_enabled": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cluster_enabled": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cluster_audit_only": {
+            "oneOf": [
+              {
+                "type": "boolean"
               },
               {
                 "type": "null"

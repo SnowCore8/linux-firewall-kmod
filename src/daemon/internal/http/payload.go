@@ -164,6 +164,11 @@ type UpdateConfigRequest struct {
 	MaxRateEntries      *uint32 `json:"max_rate_entries"`
 	MaxLocalIPCache     *uint32 `json:"max_local_ip_cache"`
 	ClearLogsAt         *string `json:"clear_logs_at"`
+	// 功能开关（跨模块）
+	RiskEngineEnabled  *bool `json:"risk_engine_enabled"`
+	ThreatFeedsEnabled *bool `json:"threat_feeds_enabled"`
+	ClusterEnabled     *bool `json:"cluster_enabled"`
+	ClusterAuditOnly   *bool `json:"cluster_audit_only"`
 }
 
 // WebuiConfigResponse 是 GET /api/v2/config 的响应载荷（契约 type WebuiConfigResponse），
@@ -199,6 +204,12 @@ type WebuiConfigResponse struct {
 	MaxLocalIPCache     uint32 `json:"max_local_ip_cache"`
 
 	ClearLogsAt *string `json:"clear_logs_at"`
+
+	// 功能开关（跨模块）
+	RiskEngineEnabled  bool `json:"risk_engine_enabled"`
+	ThreatFeedsEnabled bool `json:"threat_feeds_enabled"`
+	ClusterEnabled     bool `json:"cluster_enabled"`
+	ClusterAuditOnly   bool `json:"cluster_audit_only"`
 }
 
 // webuiConfigResponse 把配置里的 Web UI 段落映射成契约载荷。
@@ -206,7 +217,9 @@ type WebuiConfigResponse struct {
 // 只读 cfg.Webui 这一段，凭据（config.Config 根上的 MetricsPassword 等）根本不在取值范围内，
 // 因此不需要「先复制再清零」的旁路——不是靠记得清零，而是压根没有可泄露的字段。
 // ClearLogsAt 空串归一成 nil（见类型注释）。
-func webuiConfigResponse(w config.WebuiConfig) WebuiConfigResponse {
+// 功能开关从 cfg 的其他段落（RiskEngine、ThreatFeeds、Jails[0].Cluster）取值。
+func webuiConfigResponse(cfg *config.Config) WebuiConfigResponse {
+	w := cfg.Webui
 	out := WebuiConfigResponse{
 		SSEPushInterval:     w.SSEPushInterval,
 		RateWarningPPS:      w.RateWarningPPS,
@@ -226,6 +239,14 @@ func webuiConfigResponse(w config.WebuiConfig) WebuiConfigResponse {
 		MaxWhitelistEntries: w.MaxWhitelistEntries,
 		MaxRateEntries:      w.MaxRateEntries,
 		MaxLocalIPCache:     w.MaxLocalIPCache,
+		// 功能开关
+		RiskEngineEnabled:  cfg.RiskEngine.Enabled,
+		ThreatFeedsEnabled: cfg.ThreatFeeds.Enabled,
+	}
+	// 集群设置是 per-jail 的，从第一个 jail 读取（假设所有 jail 设置相同）
+	if len(cfg.Jails) > 0 {
+		out.ClusterEnabled = cfg.Jails[0].Cluster.Enabled
+		out.ClusterAuditOnly = cfg.Jails[0].Cluster.AuditOnly
 	}
 	if w.ClearLogsAt != "" {
 		clear := w.ClearLogsAt

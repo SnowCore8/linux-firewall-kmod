@@ -70,6 +70,10 @@ const BOOL_FIELDS = [
   'static_threshold',
   'dynamic_threshold',
   'ddos_detection',
+  'risk_engine_enabled',
+  'threat_feeds_enabled',
+  'cluster_enabled',
+  'cluster_audit_only',
 ] as const satisfies readonly (keyof WebuiConfigResponse)[]
 
 /**
@@ -96,6 +100,11 @@ interface SettingsFormValues {
   max_rate_entries: number
   max_local_ip_cache: number
   clear_logs_at: Dayjs | null
+  // 功能开关（跨模块）
+  risk_engine_enabled: boolean
+  threat_feeds_enabled: boolean
+  cluster_enabled: boolean
+  cluster_audit_only: boolean
 }
 
 /** 数值字段统一的栅格布局（窄屏自动折行，宽屏一行多列）。 */
@@ -167,6 +176,11 @@ function configToForm(cfg: WebuiConfigResponse): SettingsFormValues {
     max_rate_entries: cfg.max_rate_entries,
     max_local_ip_cache: cfg.max_local_ip_cache,
     clear_logs_at: parseHHmm(cfg.clear_logs_at),
+    // 功能开关
+    risk_engine_enabled: cfg.risk_engine_enabled,
+    threat_feeds_enabled: cfg.threat_feeds_enabled,
+    cluster_enabled: cfg.cluster_enabled,
+    cluster_audit_only: cfg.cluster_audit_only,
   }
 }
 
@@ -519,6 +533,46 @@ export default function Settings() {
                       label="动态阈值检测"
                       valuePropName="checked"
                       extra="按历史基线 × 倍数自适应判定"
+                    >
+                      <Switch />
+                    </Form.Item>
+                  </div>
+                </Card>
+
+                <Card title="功能开关" size="small">
+                  <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+                    高级功能模块的启用/禁用，关闭后相关功能将不可用
+                  </Typography.Paragraph>
+                  <div style={FIELD_GRID}>
+                    <Form.Item
+                      name="risk_engine_enabled"
+                      label="风险引擎"
+                      valuePropName="checked"
+                      extra="多维风险向量记录与分析 API；关闭后风险引擎页面不可用"
+                    >
+                      <Switch />
+                    </Form.Item>
+                    <Form.Item
+                      name="threat_feeds_enabled"
+                      label="威胁情报源"
+                      valuePropName="checked"
+                      extra="外部情报拉取与命中封禁；关闭后不再查询 IPsum/FireHOL 等情报源"
+                    >
+                      <Switch />
+                    </Form.Item>
+                    <Form.Item
+                      name="cluster_enabled"
+                      label="集群扫描"
+                      valuePropName="checked"
+                      extra="协同扫描检测；关闭后不再检测来自同一网段的分布式攻击"
+                    >
+                      <Switch />
+                    </Form.Item>
+                    <Form.Item
+                      name="cluster_audit_only"
+                      label="集群审计模式"
+                      valuePropName="checked"
+                      extra="仅记录不封禁；开启后集群检测只记日志不自动封禁"
                     >
                       <Switch />
                     </Form.Item>

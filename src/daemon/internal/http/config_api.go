@@ -42,11 +42,11 @@ func (h *APIHandlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		WriteServiceUnavailable(w, "config not available")
 		return
 	}
-	// 读锁内只取副本：Webui 是值类型，拷贝即与共享实例脱钩。
+	// 读锁内取整份配置副本（webuiConfigResponse 需要访问多个段落）。
 	config.RLockConfig()
-	webui := cfg.Webui
+	cfgCopy := *cfg
 	config.RUnlockConfig()
-	WriteSuccess(w, webuiConfigResponse(webui))
+	WriteSuccess(w, webuiConfigResponse(&cfgCopy))
 }
 
 // UpdateConfig 接收 Web UI 配置的**局部更新**（PUT /api/v2/config）。
@@ -103,7 +103,7 @@ func (h *APIHandlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 	// 可能正在锁内改写它，锁外读就是数据竞争。
 	if _, fileBacked := applyWebuiUpdate(config.WebuiConfig{}, &req); !fileBacked {
 		// 空 body（什么都没提交）既不改文件也不下发，只回当前快照。
-		WriteSuccess(w, webuiConfigResponse(h.snapshotWebui(cfg)))
+		WriteSuccess(w, webuiConfigResponse(h.snapshotConfig(cfg)))
 		return
 	}
 	// 合并与校验都必须在 configFileMu 内按**当时的** cfg.Webui 重算：两个并发 PUT 各自
@@ -113,17 +113,18 @@ func (h *APIHandlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteSuccess(w, webuiConfigResponse(h.snapshotWebui(cfg)))
+	WriteSuccess(w, webuiConfigResponse(h.snapshotConfig(cfg)))
 }
 
-// snapshotWebui 在读锁内取一份 webui 段副本。
+// snapshotConfig 在读锁内取一份完整配置副本。
 //
-// 响应要的是「此刻的取值」，而不是一个指向共享实例的指针：解锁之后 cfg.Webui 还可能
+// 响应要的是「此刻的取值」，而不是一个指向共享实例的指针：解锁之后配置还可能
 // 被 SIGHUP 重载或另一个 PUT 改写。
-func (h *APIHandlers) snapshotWebui(cfg *config.Config) config.WebuiConfig {
+func (h *APIHandlers) snapshotConfig(cfg *config.Config) *config.Config {
 	config.RLockConfig()
 	defer config.RUnlockConfig()
-	return cfg.Webui
+	cfgCopy := *cfg
+	return &cfgCopy
 }
 
 // persistWebui 把新的 webui 段并回配置文件、按加载口径复核并下发内核，返回是否成功。
@@ -156,7 +157,8 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, re
 	// 局部更新以锁内的现值为底：锁外的旧值在并发请求下会丢掉另一个请求刚写的字段。
 	// 读锁只包住这一次拷贝；后续的读文件/合并/校验/写盘都在配置锁之外，不与热重载的
 	// 整份替换互斥，靠 configFileMu 串行化「合并 + 校验 + 写盘」这一段。
-	updated, _ := applyWebuiUpdate(h.snapshotWebui(cfg), req)
+	cfgCopy := h.snapshotConfig(cfg)
+	updated, _ := applyWebuiUpdate(cfgCopy.Webui, req)
 	if err := validateWebui(updated); err != nil {
 		WriteCode(w, httpcontract.Code40004, "更新配置失败："+err.Error())
 		return false
@@ -169,7 +171,7 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, re
 		return false
 	}
 
-	merged, err := patchWebuiYAML(string(content), updated)
+	merged, err := patchWebuiYAML(string(content), updated, req)
 	if err != nil {
 		h.server.logger.Error("合并 webui 段失败", "path", path, "error", err)
 		WriteCode(w, httpcontract.Code40004, "更新配置失败：合并配置段失败")
@@ -199,6 +201,8 @@ func (h *APIHandlers) persistWebui(w http.ResponseWriter, cfg *config.Config, re
 	config.LockConfig()
 	cfg.Webui = updated
 	syncDdosToggles(cfg, updated)
+	// 功能开关直接更新内存（这些字段不属于 webui 段，但有各自的配置段）
+	syncFeatureToggles(cfg, req)
 	config.UnlockConfig()
 
 	if h.kernelConfig != nil {
@@ -357,6 +361,30 @@ func syncDdosToggles(cfg *config.Config, w config.WebuiConfig) {
 	cfg.Ddos.DdosDetection = w.DdosDetection
 }
 
+// syncFeatureToggles 把面板的功能开关同步到各自的配置段。
+//
+// 调用方必须持有 config.LockConfig：写的是共享实例上的 cfg.RiskEngine / cfg.ThreatFeeds / cfg.Jails。
+// 这里是纯字段赋值，不带任何日志或 I/O，便于把整个写窗口压到最短。
+func syncFeatureToggles(cfg *config.Config, req *UpdateConfigRequest) {
+	if req.RiskEngineEnabled != nil {
+		cfg.RiskEngine.Enabled = *req.RiskEngineEnabled
+	}
+	if req.ThreatFeedsEnabled != nil {
+		cfg.ThreatFeeds.Enabled = *req.ThreatFeedsEnabled
+	}
+	// 集群设置是 per-jail 的，应用到所有 jail
+	if req.ClusterEnabled != nil || req.ClusterAuditOnly != nil {
+		for i := range cfg.Jails {
+			if req.ClusterEnabled != nil {
+				cfg.Jails[i].Cluster.Enabled = *req.ClusterEnabled
+			}
+			if req.ClusterAuditOnly != nil {
+				cfg.Jails[i].Cluster.AuditOnly = *req.ClusterAuditOnly
+			}
+		}
+	}
+}
+
 // validateWebui 校验合并后的 webui 取值（前端 types.ts 记的那组约束）。
 //
 // 校验的是**合并后的最终状态**而不是逐个提交字段：局部更新只改一两个字段，但契约的约束
@@ -394,11 +422,12 @@ func validateWebui(w config.WebuiConfig) error {
 }
 
 // patchWebuiYAML 把 webui 段整段替换成 w，其余段落原样保留，返回新的 YAML 文本。
+// 同时把功能开关写入各自的配置段（risk_engine、threat_feeds、cluster）。
 //
 // 走通用 map 而不是 config 包里的 yamlWebui：那个 DTO 不导出，且它的字段与 webui 段一一对应，
 // 由 map 覆盖能保证**未在此处列出的键也原样留下**（未来 webui 段加键时，这条路由不会顺手
 // 把它们删掉）。这里列出的 19 个键必须与 config 的 yamlWebui 字段保持一致。
-func patchWebuiYAML(content string, w config.WebuiConfig) (string, error) {
+func patchWebuiYAML(content string, w config.WebuiConfig, req *UpdateConfigRequest) (string, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
 		return "", err
@@ -437,6 +466,50 @@ func patchWebuiYAML(content string, w config.WebuiConfig) (string, error) {
 	ddos["dynamic_threshold"] = w.DynamicThreshold
 	ddos["ddos_detection"] = w.DdosDetection
 	doc["ddos"] = ddos
+
+	// 功能开关写入各自的配置段
+	if req.RiskEngineEnabled != nil {
+		riskEngine, _ := doc["risk_engine"].(map[string]any)
+		if riskEngine == nil {
+			riskEngine = map[string]any{}
+		}
+		riskEngine["enabled"] = *req.RiskEngineEnabled
+		doc["risk_engine"] = riskEngine
+	}
+	if req.ThreatFeedsEnabled != nil {
+		threatFeeds, _ := doc["threat_feeds"].(map[string]any)
+		if threatFeeds == nil {
+			threatFeeds = map[string]any{}
+		}
+		threatFeeds["enabled"] = *req.ThreatFeedsEnabled
+		doc["threat_feeds"] = threatFeeds
+	}
+	// 集群设置是 per-jail 的，写入每个 jail 的 cluster 段
+	if req.ClusterEnabled != nil || req.ClusterAuditOnly != nil {
+		jails, _ := doc["jails"].(map[string]any)
+		if jails != nil {
+			for jailName, jailVal := range jails {
+				jail, _ := jailVal.(map[string]any)
+				if jail == nil {
+					continue
+				}
+				cluster, _ := jail["cluster"].(map[string]any)
+				if cluster == nil {
+					cluster = map[string]any{}
+				}
+				if req.ClusterEnabled != nil {
+					cluster["enabled"] = *req.ClusterEnabled
+				}
+				if req.ClusterAuditOnly != nil {
+					cluster["audit_only"] = *req.ClusterAuditOnly
+				}
+				jail["cluster"] = cluster
+				jails[jailName] = jail
+			}
+			doc["jails"] = jails
+		}
+	}
+
 	out, err := yaml.Marshal(doc)
 	if err != nil {
 		return "", err

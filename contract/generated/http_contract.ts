@@ -387,6 +387,10 @@ export interface WebuiConfigResponse {
   max_rate_entries: number
   max_local_ip_cache: number
   clear_logs_at: string | null
+  risk_engine_enabled: boolean
+  threat_feeds_enabled: boolean
+  cluster_enabled: boolean
+  cluster_audit_only: boolean
 }
 
 /** 契约类型 `UpdateConfigRequest` */
@@ -410,6 +414,10 @@ export interface UpdateConfigRequest {
   max_rate_entries?: number | null
   max_local_ip_cache?: number | null
   clear_logs_at?: string | null
+  risk_engine_enabled?: boolean | null
+  threat_feeds_enabled?: boolean | null
+  cluster_enabled?: boolean | null
+  cluster_audit_only?: boolean | null
 }
 
 /** 契约类型 `WhitelistEntryResponse`（前端名） */

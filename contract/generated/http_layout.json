@@ -32,8 +32,8 @@
     "请求 BatchBanRequest: 3 个字段",
     "响应 JailResponse: 15 个字段",
     "请求 UpdateJailRequest: 1 个字段",
-    "响应 WebuiConfigResponse: 19 个字段",
-    "请求 UpdateConfigRequest: 19 个字段",
+    "响应 WebuiConfigResponse: 23 个字段",
+    "请求 UpdateConfigRequest: 23 个字段",
     "响应 WhitelistEntryResponse: 2 个字段",
     "响应 WhitelistOperationResponse: 2 个字段",
     "响应 WhitelistRecommendation: 6 个字段",
@@ -1881,6 +1881,22 @@
         {
           "key": "clear_logs_at",
           "type": "Option<String>"
+        },
+        {
+          "key": "risk_engine_enabled",
+          "type": "bool"
+        },
+        {
+          "key": "threat_feeds_enabled",
+          "type": "bool"
+        },
+        {
+          "key": "cluster_enabled",
+          "type": "bool"
+        },
+        {
+          "key": "cluster_audit_only",
+          "type": "bool"
         }
       ]
     },
@@ -1965,6 +1981,22 @@
         {
           "key": "clear_logs_at",
           "type": "Option<String>"
+        },
+        {
+          "key": "risk_engine_enabled",
+          "type": "Option<bool>"
+        },
+        {
+          "key": "threat_feeds_enabled",
+          "type": "Option<bool>"
+        },
+        {
+          "key": "cluster_enabled",
+          "type": "Option<bool>"
+        },
+        {
+          "key": "cluster_audit_only",
+          "type": "Option<bool>"
         }
       ]
     },

@@ -191,6 +191,11 @@ export interface WebuiConfigResponse {
   max_rate_entries: number
   max_local_ip_cache: number
   clear_logs_at: string | null
+  // 功能开关（跨模块）
+  risk_engine_enabled: boolean
+  threat_feeds_enabled: boolean
+  cluster_enabled: boolean
+  cluster_audit_only: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -773,6 +778,11 @@ export interface UpdateConfigRequest {
   max_rate_entries?: number | null
   max_local_ip_cache?: number | null
   clear_logs_at?: string | null
+  // 功能开关（跨模块）
+  risk_engine_enabled?: boolean | null
+  threat_feeds_enabled?: boolean | null
+  cluster_enabled?: boolean | null
+  cluster_audit_only?: boolean | null
 }
 
 /** POST /api/v2/whitelist 请求体。 */

@@ -1292,6 +1292,11 @@ type WebuiConfigResponse {
   max_rate_entries: u32
   max_local_ip_cache: u32
   clear_logs_at: Option<String>
+  # 功能开关（跨模块）
+  risk_engine_enabled: bool
+  threat_feeds_enabled: bool
+  cluster_enabled: bool
+  cluster_audit_only: bool
 }
 
 request UpdateConfigRequest {
@@ -1314,6 +1319,11 @@ request UpdateConfigRequest {
   max_rate_entries: Option<u32>
   max_local_ip_cache: Option<u32>
   clear_logs_at: Option<String>
+  # 功能开关（跨模块）
+  risk_engine_enabled: Option<bool>
+  threat_feeds_enabled: Option<bool>
+  cluster_enabled: Option<bool>
+  cluster_audit_only: Option<bool>
 }
 
 # ---- 白名单 -----------------------------------------------------------------
