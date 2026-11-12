@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 5 | 4 | 1 |
-| HIGH | 103 | 74 | 28 |
+| HIGH | 103 | 78 | 24 |
 | MEDIUM | 222 | 100 | 111 |
 | LOW | 225 | 34 | 190 |
-| **合计** | **555** | **212** | **330** |
+| **合计** | **555** | **216** | **326** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -696,29 +696,29 @@
 
 ### 第五轮扫描补充（HIGH 5 项）
 
-### H-93 🔴 Supervisor.Spawn 创建的 goroutine 没有 panic 恢复保护
+### H-93 🟢 Supervisor.Spawn 创建的 goroutine 没有 panic 恢复保护
 - **文件**: `src/daemon/internal/runtime/supervisor.go:63`
 - **问题**: `Spawn` 方法创建的 goroutine 没有 `defer recover()` 保护。如果 `body()` 函数发生 panic，整个进程会崩溃
 - **影响**: 单个 goroutine 的 panic 导致整个进程崩溃，对于高可用性防火墙守护进程不可接受
-- **修复**: 在 `Spawn` 的 goroutine 中添加 `defer func() { if r := recover(); r != nil { logger.Error("goroutine panic", "name", name, "panic", r) } }()`，并将 panic 视为致命错误触发优雅关停
+- **状态**: ✅ 已修复 — 在 `Spawn` 的 goroutine 中添加 `defer recover()`，捕获 panic 并记录错误日志
 
-### H-94 🔴 SQLite 数据库操作没有查询级超时
+### H-94 🟢 SQLite 数据库操作没有查询级超时
 - **文件**: `src/daemon/internal/persist/db.go` 全文
 - **问题**: SQLite 数据库操作没有使用 `context.WithTimeout` 或 `sql.DB.SetConnMaxLifetime` 设置查询级超时。`SetConnMaxLifetime(0)` 表示连接永不过期。虽然设置了 `PRAGMA busy_timeout=5000`，但这只处理锁竞争超时，不处理查询本身的执行超时
 - **影响**: 在主链路的关键路径上（如 `RecordBanEvent`、`RecordBanHistory`），一个慢查询可能钉住整个判定链路
-- **修复**: 为所有数据库操作引入 `context.WithTimeout`，使用 `db.conn.QueryContext(ctx, ...)` 替代 `db.conn.Query(...)`。建议设置 5 秒的查询超时上限
+- **状态**: ✅ 已修复 — 新增 `queryTimeout = 5 * time.Second` 常量和 `queryCtx()` 方法，为主链路上的数据库操作提供 context.WithTimeout 保护
 
-### H-95 🔴 信号管道写入错误被忽略
+### H-95 🟢 信号管道写入错误被忽略
 - **文件**: `src/daemon/internal/runtime/signals.go:87`
 - **问题**: `unix.Write(s.w, []byte{signalByte(kind)})` 的返回值被完全忽略。虽然注释解释了"管道满说明还有未消费的信号"，但如果 write 因其他原因失败（如 fd 已关闭），这个错误被静默吞掉，信号可能丢失而没有任何日志记录
 - **影响**: 信号丢失无法诊断
-- **修复**: 至少检查错误并记一条 debug 级日志：`if _, err := unix.Write(...); err != nil { slog.Debug("信号写入管道失败", "error", err) }`
+- **状态**: ✅ 已修复 — 检查 `unix.Write` 返回值，失败时记录 debug 级日志
 
-### H-96 🔴 HTTP 服务器启动失败错误未传回主 goroutine
+### H-96 🟢 HTTP 服务器启动失败错误未传回主 goroutine
 - **文件**: `src/daemon/cmd/firewall-daemon/main.go:530-534`
 - **问题**: HTTP 服务器的 `Start()` 在独立 goroutine 中运行，如果监听失败（如端口被占用），错误只被记录到日志，但没有通过任何通道通知主 goroutine。主 goroutine 会继续完成装配并进入等待终止信号的循环
 - **影响**: 用户以为服务已启动成功，实际面板不可访问
-- **修复**: 使用 `errCh` 通道将 `Start()` 的错误传回主 goroutine，或在 `Start()` 返回错误时调用 `requestStop(err)`
+- **状态**: ✅ 已修复 — `Start()` 失败时调用 `requestStop(serveErr)` 触发优雅关停
 
 ### H-97 🔴 风险引擎端点未检查 risk_engine.enabled 配置项
 - **文件**: `src/daemon/internal/http/risk.go:16-57, 64-108, 120-169`
