@@ -1,7 +1,7 @@
 # 功能缺陷清单
 
 > 生成时间：2026-11-11
-> 更新时间：2026-11-12（第五轮：API 契约一致性与配置验证扫描，新增 26 项）
+> 更新时间：2026-11-12（第六轮：日志系统与 GeoIP 扫描，新增 15 项）
 > 状态标记：🔴 待修复 | 🟡 修复中 | 🟢 已修复 | ⚪ 设计取舍/复核为误报
 
 ---
@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 5 | 4 | 1 |
-| HIGH | 99 | 72 | 26 |
-| MEDIUM | 217 | 100 | 106 |
-| LOW | 219 | 34 | 184 |
-| **合计** | **540** | **210** | **317** |
+| HIGH | 103 | 74 | 28 |
+| MEDIUM | 222 | 100 | 111 |
+| LOW | 225 | 34 | 190 |
+| **合计** | **555** | **212** | **330** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -662,17 +662,17 @@
 
 ### 第四轮扫描补充（守护进程 HIGH 2 项）
 
-### H-88 🔴 RetryQueue.run() 中 time.After 定时器泄漏
+### H-88 🟢 RetryQueue.run() 中 time.After 定时器泄漏
 - **文件**: `src/daemon/internal/persist/retry_queue.go:222`
 - **问题**: `select` 中的 `<-time.After(backoff)` 在每次循环迭代中创建一个新的 `time.Timer`。当 `<-q.stop` 或 `<-q.wake` 分支被选中时，该定时器不会被 `Stop()`。未触发的定时器会一直存活到 `backoff` 到期（最长 2 分钟），期间其内部 goroutine 无法被 GC 回收
 - **影响**: 在关停频繁或数据库持续不可用的场景下，每次迭代泄漏一个定时器，最多积累 2 分钟的定时器对象
-- **修复**: 将 `time.After` 替换为显式的 `time.NewTimer` + `defer timer.Stop()` 模式
+- **状态**: ✅ 已修复 — 将 `time.After` 替换为显式的 `time.NewTimer` + `timer.Stop()`，stop/wake 分支选中时显式 Stop 定时器
 
-### H-89 🔴 Facts.loadScoreLocked 持 f.mu 期间执行数据库 I/O
+### H-89 🟢 Facts.loadScoreLocked 持 f.mu 期间执行数据库 I/O
 - **文件**: `src/daemon/internal/persist/facts.go:283-301`
 - **问题**: `loadScoreLocked` 在持有 `f.mu`（缓存互斥锁）的前提下调用 `f.db.GetIPReputation()`，这是一次 SQLite 查询。数据库配置了 `busy_timeout=5000`（5 秒），若此时 flusher goroutine 正在写库，该查询最多阻塞 5 秒。在此期间，`f.mu` 被持有，阻塞了执行体 goroutine 的所有后续 `RecordFailure` / `ReputationScore` / `PriorBanCount` 调用
 - **影响**: 在数据库高负载时，主链路的延迟会从微秒级退化到秒级
-- **修复**: 将数据库读取移到锁外。先在锁内标记 `scoreLoaded = true` 并记录需要加载的 IP，释放锁后执行查询，再重新加锁应用结果
+- **状态**: ✅ 已修复 — 将 loadScoreLocked/loadBansLocked 拆分为锁内标记 + 锁外 DB 读取（loadScoreFromDB/loadBansFromDB），重新加锁后校验条目仍在索引中且未被替换
 
 ### 第四轮扫描补充（内核 HIGH 3 项）
 
@@ -726,9 +726,35 @@
 - **影响**: 当数据库已初始化但功能被关闭时，端点仍会返回数据，直接违反契约
 - **修复**: 在每个 handler 入口处增加配置检查：`if cfg := h.currentConfig(); cfg == nil || !cfg.RiskEngine.Enabled { WriteServiceUnavailable(w, "风险引擎未启用"); return }`
 
+### 第六轮扫描补充（日志系统与 GeoIP HIGH 4 项）
+
+### H-98 🔴 GeoIP 出口探测缺乏重试逻辑
+- **文件**: `src/daemon/internal/geoip/egress.go:30-89`
+- **问题**: `DetectEgress` 函数仅执行单次 HTTP 请求，无重试机制。网络瞬断、DNS 解析暂时失败、探测服务短暂不可用等情况都会导致出口 IP 探测永久失败
+- **影响**: 10 秒超时后直接返回错误，调用方无法获得有效的出口 IP 用于 GeoIP 定位
+- **修复**: 实现指数退避重试（如 3 次重试，间隔 1s/2s/4s），或使用多个备用探测服务（如 ipify、ifconfig.co、ipinfo.io）进行故障切换
+
+### H-99 🔴 inotify watch 数量限制未处理
+- **文件**: `src/daemon/internal/ingest/watcher.go:82-88`, `src/daemon/internal/runtime/executor.go:970-974`
+- **问题**: `Watcher.Add` 调用 `unix.InotifyAddWatch` 时未处理 `ENOSPC` 错误（inotify watches 耗尽）。Linux 默认 `fs.inotify.max_user_watches=8192`，监控大量日志文件时可能静默失败
+- **影响**: `addSharedLogSource` 中 watch 添加失败仅记录 warn 日志并返回，但该日志源会永久丢失监控，直到下次重扫（60 秒）才可能恢复
+- **修复**: 检测 `ENOSPC` 错误时主动告警并建议用户调高 `fs.inotify.max_user_watches`；在启动时检查当前 watch 使用量，接近上限时提前预警
+
+### H-100 🔴 正则表达式双重编译导致安全校验可被绕过
+- **文件**: `src/daemon/internal/jail/compile.go:90`, `src/daemon/internal/logparse/rule.go:42-47`, `src/daemon/internal/runtime/executor.go:1524`
+- **问题**: `CompileJailRegexesWithWarnings` 在 compile.go:90 先做安全校验后编译正则，但 `BuildRuleSet` 和 `ruleSetFor` 又调用 `logparse.NewRule`，该函数内部再次调用 `regexp.Compile(pattern)`。虽然注释声称"只搬 Compiled != nil 的条目"，但 `NewRule` 会用原始 pattern 重新编译
+- **影响**: 若安全校验通过后 pattern 被篡改（如配置文件热重载竞态），或 `NewRule` 编译失败导致行为不一致，可能引入风险。更重要的是，双重编译浪费 CPU 资源
+- **修复**: `NewRule` 应接受已编译的 `*regexp.Regexp` 而非重新编译，或将安全校验与编译合并为单一操作，避免重复编译
+
+### H-101 🔴 GeoIP 数据库全量加载到内存
+- **文件**: `src/daemon/internal/geoip/geoip.go:56-60`
+- **问题**: `Open` 函数使用 `os.ReadFile` 将整个 MMDB 文件读入内存。MaxMind City 数据库通常 50-100 MB，GeoIP2 完整版可达数百 MB
+- **影响**: 对于内存受限的嵌入式场景或同时加载多个数据库时，可能导致 OOM 或触发频繁 GC
+- **修复**: 使用 `mmap` 或 `os.Open` + `ReadAt` 实现按需读取，仅加载元数据和查询路径上的节点
+
 ---
 
-## MEDIUM 级（217 项）
+## MEDIUM 级（222 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -1021,10 +1047,19 @@
 | M-157 | `daemon/internal/config/parser.go:572-579` | `findtime` 小于 10 时被静默钳到 10，小于 60 时被静默替换为默认值 600，用户配置的值与实际生效值不一致 | 🔴 |
 | M-158 | `daemon/internal/runtime/file_reloader.go:115-150` | 热重载时 `log_file`/`log_level`/`log_format` 的改变只记 warn 日志说"需要重启"，但内存中的配置值已被新值覆盖，与实际日志系统行为不一致 | 🔴 |
 
+### 第六轮扫描补充（日志系统与 GeoIP MEDIUM 5 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-159 | `daemon/internal/logparse/splitter.go:48-95` | `LineSplitter.Feed` 仅按 `\n` 分割日志行，无多行日志拼接能力。Java stack trace、Go panic 输出等跨行日志会被拆成多条独立行，每行都无法匹配正则 | 🔴 |
+| M-160 | `daemon/internal/logparse/splitter.go:48-95`, `rule.go:56-78` | 日志行直接以 `string(line)` 传给正则匹配，未做编码检测或转换。若日志文件使用 GBK、Latin-1 等非 UTF-8 编码，Go 的 `regexp` 包按 UTF-8 处理会导致匹配失败或乱码 | 🔴 |
+| M-161 | `daemon/internal/logparse/rule.go:109-128`, `runtime/pipeline.go:336-397` | 整个解析链路仅提取 IP 地址，完全不解析日志时间戳。判定层使用 `time.Now()` 作为事件时间，而非日志实际发生时间。若日志采集有延迟或来自不同时区，失败窗口计算会基于错误的时间 | 🔴 |
+| M-162 | `daemon/internal/runtime/executor.go:581-601` | `drainAfterOverflow` 对每个源最多补读 64 批（每批 256 KiB，共 16 MiB）。若溢出期间某日志文件写入量超过 16 MiB，剩余数据将留在文件中等待下一个事件唤醒。但溢出后内核不再发送事件，若文件停止写入，这些字节将永久丢失 | 🔴 |
+| M-163 | `daemon/internal/runtime/executor.go:767-823` | `handleRotation` 处理 `MOVE_SELF`/`DELETE_SELF` 时，先 `dropSource`（摘除旧 watch），再尝试 `addSharedLogSource` 重挂新 watch。若新文件尚未创建，会加入 `pendingReadd` 队列，由 `retryPendingReadd` 每秒重试。在此期间（最长 60 秒），该日志文件的写入不会被监控 | 🔴 |
+
 
 ---
 
-## LOW 级（219 项）
+## LOW 级（225 项）
 
 ### 内核模块（6 项）
 | # | 文件 | 问题 |
@@ -1232,6 +1267,16 @@
 | L-100 | `daemon/internal/persist/facts.go:218,694`：`facts.eventWorker()` 和 `StartFlusher` 中的 goroutine 没有 panic 恢复机制，一旦 panic 会导致进程崩溃或数据丢失 |
 | L-101 | `daemon/internal/threatfeeds/manager.go:191`：`RefreshAll` 中为每个源创建的 goroutine 没有 panic 恢复，如果某个源的解析器触发 panic，会导致整个 `RefreshAll` 的 WaitGroup 永远无法完成 |
 | L-102 | `daemon/internal/runtime/executor.go:1560-1568`：`inodeOfPath` 函数中 `os.Stat` 的错误被完全忽略，如果 `Stat` 因权限问题失败，可能导致轮转检测逻辑走错分支 |
+
+### 第六轮扫描补充（日志系统与 GeoIP LOW 6 项）
+| # | 问题 |
+|---|------|
+| L-103 | `daemon/internal/logparse/rule.go:152-262`：`ValidateRegexSafety` 检查嵌套量词、占有量词、量化交替组等，但未限制 `{n,m}` 中 `m` 的最大值，`(a{1,99999})+` 仍可能触发大量回溯 |
+| L-104 | `daemon/internal/geoip/decoder.go:248-289`：`decodePointer` 创建子 decoder 并递归调用 `decode`，虽有 `maxNesting=128` 限制深度，但未检测指针循环引用（如 A 指向 B，B 指向 A）。恶意构造的 MMDB 文件可能导致无限递归直到栈溢出 |
+| L-105 | `daemon/internal/logparse/splitter.go:6,73-78`：`MaxLineBytes = 8192`，超过该行长的日志被丢弃并计入 `Oversized`。某些应用（如 HTTP 访问日志含长 URL、JSON 结构化日志）可能产生超长行，导致关键信息丢失 |
+| L-106 | `daemon/internal/ingest/reader.go:350-362`：`openNoFollow` 中 `unix.Open` 成功后若 `file.Stat()` 失败，会调用 `file.Close()` 释放 fd，处理正确。但 `SourceReader.Reset()` 和 `Close()` 在关闭 fd 前未检查 `fd` 是否已被外部关闭，若 `Close()` 返回错误（如 `EBADF`），错误被忽略 |
+| L-107 | `daemon/internal/geoip/geoip.go:166-184`：`Lookup` 每次查询都遍历搜索树，无结果缓存。高频封禁场景下（如 DDoS），同一 IP 可能被查询数百次，每次都走完整树遍历 |
+| L-108 | `daemon/internal/runtime/executor.go:962-965`：`addSharedLogSource` 先 `Lstat` 检查是否为符号链接，再 `Stat` 检查是否存在，最后 `watcher.Add`。三次系统调用之间文件可能被替换（TOCTOU 竞态） |
 
 
 ---
