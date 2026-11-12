@@ -1,7 +1,7 @@
 # 功能缺陷清单
 
 > 生成时间：2026-11-11
-> 更新时间：2026-11-12（第四轮：并发安全与状态机、前端状态与渲染、内核边界条件扫描，新增 45 项）
+> 更新时间：2026-11-12（第五轮：API 契约一致性与配置验证扫描，新增 26 项）
 > 状态标记：🔴 待修复 | 🟡 修复中 | 🟢 已修复 | ⚪ 设计取舍/复核为误报
 
 ---
@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 5 | 4 | 1 |
-| HIGH | 94 | 69 | 24 |
-| MEDIUM | 206 | 100 | 95 |
-| LOW | 197 | 34 | 162 |
-| **合计** | **502** | **207** | **282** |
+| HIGH | 99 | 72 | 26 |
+| MEDIUM | 217 | 100 | 106 |
+| LOW | 219 | 34 | 184 |
+| **合计** | **540** | **210** | **317** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -57,7 +57,7 @@
 
 ---
 
-## HIGH 级（94 项）
+## HIGH 级（99 项）
 
 ### H-1 🟢 内核模块 ip_fast_csum 读取越界
 - **文件**: `src/kernel-module/fw_hook.c:159-162,191`
@@ -676,27 +676,59 @@
 
 ### 第四轮扫描补充（内核 HIGH 3 项）
 
-### H-90 🔴 procfs stats_show 将 64 位原子计数器截断为 32 位
+### H-90 🟢 procfs stats_show 将 64 位原子计数器截断为 32 位
 - **文件**: `src/kernel-module/fw_procfs.c:598-607`
 - **问题**: `total_bans`、`total_unbans`、`ban_table_full_rejects`、`alloc_failures`、`cleanup_expired_total` 在 `struct fw_stats_snapshot` 中均为 `u64`（源自 `atomic64_t`），但 `stats_show` 用 `(unsigned int)` 强转后以 `%u` 输出。当计数器超过 2^32（约 42.9 亿）时，procfs 输出将静默回绕，daemon 读到错误的统计值
 - **影响**: 在长期运行的繁忙防火墙上（每秒数千次封禁/解封），几个月内即可触发
-- **修复**: 统一使用 `%llu` 和 `(unsigned long long)` 强转，与同函数内 `packets_dropped` 等字段的输出方式保持一致
+- **状态**: ✅ 已修复 — 统一使用 `%llu` 和 `(unsigned long long)` 强转
 
-### H-91 🔴 EWMA 定点计算中间值 u64 溢出
+### H-91 🟢 EWMA 定点计算中间值 u64 溢出
 - **文件**: `src/kernel-module/fw_rate.c:96-98`
 - **问题**: `fw_ewma()` 的实现为 `(cur / 10) * 3 + (old / 10) * 7`。虽然正常流量下难以达到此量级，但通过 netlink `SET_CONFIG` 可将 `max_packets_per_second` 等阈值设为任意 `u64` 非零值。若管理员设阈值接近 `U64_MAX`，EWMA 会趋近该值，随后 `(old / 10) * 7` 溢出导致平滑值回绕为极小值，使违规判定瞬间失效
 - **影响**: 所有流量都被放行，直到 EWMA 重新收敛
-- **修复**: 使用饱和算术或调整运算顺序，检测 `(o * 7)` 是否溢出，溢出时返回 `U64_MAX`
+- **状态**: ✅ 已修复 — 使用饱和算术，检测 `(o * 7)` 是否溢出，溢出时返回 `U64_MAX`
 
-### H-92 🔴 锁顺序协议违规：ban bucket lock → flood_lock 嵌套未在文档中声明
+### H-92 🟢 锁顺序协议违规：ban bucket lock → flood_lock 嵌套未在文档中声明
 - **文件**: `src/kernel-module/fw_ban.c:477 + 518`
 - **问题**: `fw_types.h` 第 12-27 行明确声明锁顺序协议："除 `rate_locks[bkt] → rate_slot_lock` 这一对之外，任意两把锁**不得嵌套持有**"。但 `fw_ban_insert` 在持有 `layer->locks[bkt]`（桶锁）的情况下调用 `fw_ban_flood_allow()`，后者获取 `flood_lock`，形成了 `ban_bucket_lock → flood_lock` 嵌套
 - **影响**: 虽然当前代码中 `flood_lock` 永远是叶子锁，不会死锁，但违反了文档化的协议。未来若有人在 `flood_lock` 临界区内新增锁获取，就会引入死锁
-- **修复**: 两种方案：(a) 将 `fw_ban_flood_allow()` 的调用移到桶锁释放之后；或 (b) 在 `fw_types.h` 锁顺序协议中显式声明 `ban_bucket_lock → flood_lock` 为允许嵌套
+- **状态**: ✅ 已修复 — 在 `fw_types.h` 锁顺序协议中显式声明 `ban_bucket_lock → flood_lock` 为允许嵌套，并添加注释说明 `flood_lock` 必须是叶子锁
+
+### 第五轮扫描补充（HIGH 5 项）
+
+### H-93 🔴 Supervisor.Spawn 创建的 goroutine 没有 panic 恢复保护
+- **文件**: `src/daemon/internal/runtime/supervisor.go:63`
+- **问题**: `Spawn` 方法创建的 goroutine 没有 `defer recover()` 保护。如果 `body()` 函数发生 panic，整个进程会崩溃
+- **影响**: 单个 goroutine 的 panic 导致整个进程崩溃，对于高可用性防火墙守护进程不可接受
+- **修复**: 在 `Spawn` 的 goroutine 中添加 `defer func() { if r := recover(); r != nil { logger.Error("goroutine panic", "name", name, "panic", r) } }()`，并将 panic 视为致命错误触发优雅关停
+
+### H-94 🔴 SQLite 数据库操作没有查询级超时
+- **文件**: `src/daemon/internal/persist/db.go` 全文
+- **问题**: SQLite 数据库操作没有使用 `context.WithTimeout` 或 `sql.DB.SetConnMaxLifetime` 设置查询级超时。`SetConnMaxLifetime(0)` 表示连接永不过期。虽然设置了 `PRAGMA busy_timeout=5000`，但这只处理锁竞争超时，不处理查询本身的执行超时
+- **影响**: 在主链路的关键路径上（如 `RecordBanEvent`、`RecordBanHistory`），一个慢查询可能钉住整个判定链路
+- **修复**: 为所有数据库操作引入 `context.WithTimeout`，使用 `db.conn.QueryContext(ctx, ...)` 替代 `db.conn.Query(...)`。建议设置 5 秒的查询超时上限
+
+### H-95 🔴 信号管道写入错误被忽略
+- **文件**: `src/daemon/internal/runtime/signals.go:87`
+- **问题**: `unix.Write(s.w, []byte{signalByte(kind)})` 的返回值被完全忽略。虽然注释解释了"管道满说明还有未消费的信号"，但如果 write 因其他原因失败（如 fd 已关闭），这个错误被静默吞掉，信号可能丢失而没有任何日志记录
+- **影响**: 信号丢失无法诊断
+- **修复**: 至少检查错误并记一条 debug 级日志：`if _, err := unix.Write(...); err != nil { slog.Debug("信号写入管道失败", "error", err) }`
+
+### H-96 🔴 HTTP 服务器启动失败错误未传回主 goroutine
+- **文件**: `src/daemon/cmd/firewall-daemon/main.go:530-534`
+- **问题**: HTTP 服务器的 `Start()` 在独立 goroutine 中运行，如果监听失败（如端口被占用），错误只被记录到日志，但没有通过任何通道通知主 goroutine。主 goroutine 会继续完成装配并进入等待终止信号的循环
+- **影响**: 用户以为服务已启动成功，实际面板不可访问
+- **修复**: 使用 `errCh` 通道将 `Start()` 的错误传回主 goroutine，或在 `Start()` 返回错误时调用 `requestStop(err)`
+
+### H-97 🔴 风险引擎端点未检查 risk_engine.enabled 配置项
+- **文件**: `src/daemon/internal/http/risk.go:16-57, 64-108, 120-169`
+- **问题**: 三个风险引擎端点 (`GET /api/v2/risk/vectors/:ip`, `GET /api/v2/risk/vectors`, `GET /api/v2/risk/events/:ip`) 均未检查 `risk_engine.enabled` 配置项。契约明确声明 "仅在 risk_engine.enabled=true 时可用，否则返回 503"，但实现仅检查 `h.db == nil`
+- **影响**: 当数据库已初始化但功能被关闭时，端点仍会返回数据，直接违反契约
+- **修复**: 在每个 handler 入口处增加配置检查：`if cfg := h.currentConfig(); cfg == nil || !cfg.RiskEngine.Enabled { WriteServiceUnavailable(w, "风险引擎未启用"); return }`
 
 ---
 
-## MEDIUM 级（206 项）
+## MEDIUM 级（217 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -972,10 +1004,27 @@
 | M-148 | `kernel-module/fw_ban.c:377` | `fw_ban_exit` 使用非同步 `timer_delete` 存在理论竞态，依赖精巧的推理链保证安全性，但缺乏详细注释 | 🔴 |
 | M-149 | `kernel-module/fw_rate.c:554-575` | `fw_rate_roll` 跨 CPU 累加 `cur_packets` 等无溢出保护，高 CPU 数系统上可能溢出 `u64` | 🔴 |
 
+### 第五轮扫描补充（API 契约 MEDIUM 4 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-150 | `daemon/internal/http/threat_feeds.go:68-69` | `POST /api/v2/threat-feeds/sync` 在同步进行中时返回 50003（依赖未就绪），但语义应为"忙碌"，误用业务码 | 🔴 |
+| M-151 | `daemon/internal/http/risk.go:25,129` | 风险引擎端点的 IP 非法错误消息使用英文，与同功能其他端点的中文消息不一致 | 🔴 |
+| M-152 | `daemon/internal/http/handlers.go:75-226` 等多处 | 大量 handler 的错误消息使用英文，而 `bans.go`、`whitelist.go` 等使用中文，同一套 API 内消息语言不一致 | 🔴 |
+| M-153 | `contract/generated/openapi.json:28-41` | OpenAPI 文档将 `/api/v2/health` 的 200 响应定义为信封格式，但契约声明该端点"不经信封"，文档与实际行为不一致 | 🔴 |
+
+### 第五轮扫描补充（配置验证 MEDIUM 5 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-154 | `daemon/internal/config/parser.go:458-486` | 集群检测配置字段没有范围校验：`PrefixV4`/`PrefixV6` 接受 0-255，`MinIPs` 为 0 会导致任何单个 IP 就触发集群封禁 | 🔴 |
+| M-155 | `daemon/internal/config/parser.go:825-827` | `threat_feeds.cooldown_duration` 没有上限校验，极大值导致熔断器永远不恢复 | 🔴 |
+| M-156 | `daemon/internal/persist/retry_queue.go:121-122` | 重试队列中的任务没有最大重试次数限制，数据库永久损坏时任务无限期重试 | 🔴 |
+| M-157 | `daemon/internal/config/parser.go:572-579` | `findtime` 小于 10 时被静默钳到 10，小于 60 时被静默替换为默认值 600，用户配置的值与实际生效值不一致 | 🔴 |
+| M-158 | `daemon/internal/runtime/file_reloader.go:115-150` | 热重载时 `log_file`/`log_level`/`log_format` 的改变只记 warn 日志说"需要重启"，但内存中的配置值已被新值覆盖，与实际日志系统行为不一致 | 🔴 |
+
 
 ---
 
-## LOW 级（197 项）
+## LOW 级（219 项）
 
 ### 内核模块（6 项）
 | # | 文件 | 问题 |
@@ -1163,6 +1212,26 @@
 | L-88 | `frontend/src/views/Analysis.tsx:337-364`：`activeRefreshing` 的计算使用同步 switch 语句，每次渲染时执行，增加渲染路径长度 |
 | L-89 | `frontend/src/views/Logs.tsx:146-148`：`useEffect` 依赖了 `dropped`（自己设置的状态）和 `liveLines`（频繁变化），每次 `liveLines` 变化都触发 effect 执行比较 |
 | L-90 | `frontend/src/views/Ddos.tsx:208-219`：`Tabs` 使用 `defaultActiveKey` 而非受控的 `activeKey`，父组件无法在外部控制或响应 Tab 变化 |
+
+### 第五轮扫描补充（API 契约 LOW 5 项）
+| # | 问题 |
+|---|------|
+| L-91 | `contract/generated/openapi.json:77-86`：`GET /` 的 303 响应在 OpenAPI 中被定义为包含 `application/json` + `ApiResponse` schema，但实际实现只设置了 `Location` 头和 303 状态码，没有响应体 |
+| L-92 | `daemon/internal/http/handlers.go:124,140,156,172`：多个端点接受契约未声明的 `limit` 查询参数（max=1000），契约的 `note` 均未提及 |
+| L-93 | `daemon/internal/http/server.go:156`：`writeJSON` 在 `json.Marshal` 失败时写出 `{"code":50000,"message":"internal error"}`，使用了契约未定义的业务码 `50000` |
+| L-94 | `daemon/internal/http/threat_feeds.go:101`：`GetThreatFeed` 在情报源未找到时返回英文消息 `"feed not found"`，与同文件其他中文消息风格不一致 |
+| L-95 | `daemon/internal/http/server.go:136`：`connectionLimiter` 达到全局连接上限时返回纯文本而非信封格式，契约没有为这条路由定义错误码 |
+
+### 第五轮扫描补充（配置验证 LOW 7 项）
+| # | 问题 |
+|---|------|
+| L-96 | `daemon/internal/config/parser.go:188-206`：YAML 别名炸弹检测使用简单的字节扫描，嵌套不会被正确计算，1000 的别名引用上限可能被精心构造的输入绕过 |
+| L-97 | `daemon/internal/config/parser.go:930-932`：`geoip_db_path` 在配置解析期不做文件存在性校验，无效路径只在运行时打开时才报错 |
+| L-98 | `daemon/internal/kernel/transport.go:589-617`：`Close` 方法中关闭 fd 之前将 `t.fd` 设为 -1，但 `sendLocked` 没有使用 `closeMu` 保护其对 `t.fd` 的访问，极端时序下可能使用旧值发送 |
+| L-99 | `daemon/internal/config/parser.go:726-731`：`applyWebui` 中 `RateWarningPPS >= RateCriticalPPS` 的校验只在 `webui` 段存在时执行，如果 `webui` 段未给出而 `defaults` 段的修改使默认值之间产生矛盾，校验不会被触发 |
+| L-100 | `daemon/internal/persist/facts.go:218,694`：`facts.eventWorker()` 和 `StartFlusher` 中的 goroutine 没有 panic 恢复机制，一旦 panic 会导致进程崩溃或数据丢失 |
+| L-101 | `daemon/internal/threatfeeds/manager.go:191`：`RefreshAll` 中为每个源创建的 goroutine 没有 panic 恢复，如果某个源的解析器触发 panic，会导致整个 `RefreshAll` 的 WaitGroup 永远无法完成 |
+| L-102 | `daemon/internal/runtime/executor.go:1560-1568`：`inodeOfPath` 函数中 `os.Stat` 的错误被完全忽略，如果 `Stat` 因权限问题失败，可能导致轮转检测逻辑走错分支 |
 
 
 ---
