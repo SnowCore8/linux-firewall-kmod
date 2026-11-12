@@ -1,7 +1,7 @@
 # 功能缺陷清单
 
 > 生成时间：2026-11-11
-> 更新时间：2026-11-12（第十四轮：深度扫描 50+ 项，已修复 30 项）
+> 更新时间：2026-11-12（第四轮：并发安全与状态机、前端状态与渲染、内核边界条件扫描，新增 45 项）
 > 状态标记：🔴 待修复 | 🟡 修复中 | 🟢 已修复 | ⚪ 设计取舍/复核为误报
 
 ---
@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 5 | 4 | 1 |
-| HIGH | 83 | 67 | 15 |
-| MEDIUM | 192 | 100 | 81 |
-| LOW | 177 | 34 | 142 |
-| **合计** | **457** | **205** | **239** |
+| HIGH | 94 | 69 | 24 |
+| MEDIUM | 206 | 100 | 95 |
+| LOW | 197 | 34 | 162 |
+| **合计** | **502** | **207** | **282** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -57,7 +57,7 @@
 
 ---
 
-## HIGH 级（44 项）
+## HIGH 级（94 项）
 
 ### H-1 🟢 内核模块 ip_fast_csum 读取越界
 - **文件**: `src/kernel-module/fw_hook.c:159-162,191`
@@ -660,9 +660,43 @@
 - **问题**: 4 个 `StatCard` 的 `onClick` 属性使用内联箭头函数，每次渲染都创建新的函数引用，触发不必要的 DOM diff
 - **修复**: 将导航回调用 `useCallback` 包裹，或给 `StatCard` 传 `href` 而非 `onClick`
 
+### 第四轮扫描补充（守护进程 HIGH 2 项）
+
+### H-88 🔴 RetryQueue.run() 中 time.After 定时器泄漏
+- **文件**: `src/daemon/internal/persist/retry_queue.go:222`
+- **问题**: `select` 中的 `<-time.After(backoff)` 在每次循环迭代中创建一个新的 `time.Timer`。当 `<-q.stop` 或 `<-q.wake` 分支被选中时，该定时器不会被 `Stop()`。未触发的定时器会一直存活到 `backoff` 到期（最长 2 分钟），期间其内部 goroutine 无法被 GC 回收
+- **影响**: 在关停频繁或数据库持续不可用的场景下，每次迭代泄漏一个定时器，最多积累 2 分钟的定时器对象
+- **修复**: 将 `time.After` 替换为显式的 `time.NewTimer` + `defer timer.Stop()` 模式
+
+### H-89 🔴 Facts.loadScoreLocked 持 f.mu 期间执行数据库 I/O
+- **文件**: `src/daemon/internal/persist/facts.go:283-301`
+- **问题**: `loadScoreLocked` 在持有 `f.mu`（缓存互斥锁）的前提下调用 `f.db.GetIPReputation()`，这是一次 SQLite 查询。数据库配置了 `busy_timeout=5000`（5 秒），若此时 flusher goroutine 正在写库，该查询最多阻塞 5 秒。在此期间，`f.mu` 被持有，阻塞了执行体 goroutine 的所有后续 `RecordFailure` / `ReputationScore` / `PriorBanCount` 调用
+- **影响**: 在数据库高负载时，主链路的延迟会从微秒级退化到秒级
+- **修复**: 将数据库读取移到锁外。先在锁内标记 `scoreLoaded = true` 并记录需要加载的 IP，释放锁后执行查询，再重新加锁应用结果
+
+### 第四轮扫描补充（内核 HIGH 3 项）
+
+### H-90 🔴 procfs stats_show 将 64 位原子计数器截断为 32 位
+- **文件**: `src/kernel-module/fw_procfs.c:598-607`
+- **问题**: `total_bans`、`total_unbans`、`ban_table_full_rejects`、`alloc_failures`、`cleanup_expired_total` 在 `struct fw_stats_snapshot` 中均为 `u64`（源自 `atomic64_t`），但 `stats_show` 用 `(unsigned int)` 强转后以 `%u` 输出。当计数器超过 2^32（约 42.9 亿）时，procfs 输出将静默回绕，daemon 读到错误的统计值
+- **影响**: 在长期运行的繁忙防火墙上（每秒数千次封禁/解封），几个月内即可触发
+- **修复**: 统一使用 `%llu` 和 `(unsigned long long)` 强转，与同函数内 `packets_dropped` 等字段的输出方式保持一致
+
+### H-91 🔴 EWMA 定点计算中间值 u64 溢出
+- **文件**: `src/kernel-module/fw_rate.c:96-98`
+- **问题**: `fw_ewma()` 的实现为 `(cur / 10) * 3 + (old / 10) * 7`。虽然正常流量下难以达到此量级，但通过 netlink `SET_CONFIG` 可将 `max_packets_per_second` 等阈值设为任意 `u64` 非零值。若管理员设阈值接近 `U64_MAX`，EWMA 会趋近该值，随后 `(old / 10) * 7` 溢出导致平滑值回绕为极小值，使违规判定瞬间失效
+- **影响**: 所有流量都被放行，直到 EWMA 重新收敛
+- **修复**: 使用饱和算术或调整运算顺序，检测 `(o * 7)` 是否溢出，溢出时返回 `U64_MAX`
+
+### H-92 🔴 锁顺序协议违规：ban bucket lock → flood_lock 嵌套未在文档中声明
+- **文件**: `src/kernel-module/fw_ban.c:477 + 518`
+- **问题**: `fw_types.h` 第 12-27 行明确声明锁顺序协议："除 `rate_locks[bkt] → rate_slot_lock` 这一对之外，任意两把锁**不得嵌套持有**"。但 `fw_ban_insert` 在持有 `layer->locks[bkt]`（桶锁）的情况下调用 `fw_ban_flood_allow()`，后者获取 `flood_lock`，形成了 `ban_bucket_lock → flood_lock` 嵌套
+- **影响**: 虽然当前代码中 `flood_lock` 永远是叶子锁，不会死锁，但违反了文档化的协议。未来若有人在 `flood_lock` 临界区内新增锁获取，就会引入死锁
+- **修复**: 两种方案：(a) 将 `fw_ban_flood_allow()` 的调用移到桶锁释放之后；或 (b) 在 `fw_types.h` 锁顺序协议中显式声明 `ban_bucket_lock → flood_lock` 为允许嵌套
+
 ---
 
-## MEDIUM 级（172 项）
+## MEDIUM 级（206 项）
 
 ### 内核模块（4 项）
 | # | 文件 | 问题 | 状态 |
@@ -916,10 +950,32 @@
 | M-134 | `tests/test_17_config_reload.py:47-65` | `backup_config` fixture 与测试 finally 重复发送 SIGHUP | 🔴 |
 | M-135 | `tests/test_12_permanent_ban.py:37-44` | 永久封禁测试观察窗口过短，未真正验证不过期 | 🔴 |
 
+### 第四轮扫描补充（MEDIUM 11 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-136 | `daemon/internal/threatfeeds/cache.go:115-201` | `Merge` 在整个合并过程中持有写锁，复制最多 100 万条旧条目、增量合并、重建索引，阻塞所有 `Lookup` 数百毫秒 | 🔴 |
+| M-137 | `daemon/internal/http/sse.go:294-305` | `Publish` 使用非阻塞 `select` 向 `broadcast` 通道投递帧，队列满时丢弃消息，前端 SSE 客户端无法感知丢失 | 🔴 |
+| M-138 | `daemon/internal/bans/cache.go:195-207` | `IsPending` 在读取 `pending` map 的同时删除过期条目，要求写锁，阻塞所有并发读操作 | 🔴 |
+| M-139 | `daemon/internal/runtime/executor.go:1090-1112` | 配置热重载期间存在多锁间隙，`reloadConfig` 与 `persistWebui` 可能并发修改不同字段，依赖隐式「字段所有权」约定 | 🔴 |
+| M-140 | `frontend/src/components/CommandPalette.tsx:207-218` | `onKeyDown` 是普通函数（非 `useCallback`），每次渲染创建新引用，高频搜索时增加 GC 压力 | 🔴 |
+| M-141 | `frontend/src/providers/NotificationProvider.tsx:109-116` | `NotificationContext` 的 `value` 依赖 `items` 数组，每推入一条通知所有消费者重渲染 | 🔴 |
+| M-142 | `frontend/src/views/Logs.tsx:330-337` | `filteredLive` 的 `useMemo` 对最多 500 行日志逐行过滤，高频日志流下每次新行到达都重新过滤全部 500 行 | 🔴 |
+| M-143 | `frontend/src/providers/SseProvider.tsx:194-196` | `useLayoutEffect` 无依赖数组，每次渲染后都执行 `store.publish(snapshot)` | 🔴 |
+| M-144 | `frontend/src/views/Settings.tsx:283,301-305,332-336` | `dirty` 被声明为独立 `useState`，但在 `useEffect` 和 `handleValuesChange` 中重复计算，值滞后一个渲染周期 | 🔴 |
+| M-145 | `frontend/src/views/Jails.tsx:238-239`, `Risk.tsx:138-141` | 表格列 `render` 函数使用内联箭头函数作为 `onClick`，每行创建新函数引用增加 GC 压力 | 🔴 |
+| M-146 | `frontend/src/views/Ddos.tsx:401,751-759,1002-1011` | `expandable.expandedRowRender` 使用内联箭头函数，每次渲染创建新引用，AntD Table 可能重新协调所有展开行 | 🔴 |
+
+### 第四轮扫描补充（内核 MEDIUM 3 项）
+| # | 文件 | 问题 | 状态 |
+|---|------|------|------|
+| M-147 | `kernel-module/fw_netlink.c:915-917 + 1026-1027` | netlink 接收回调与模块退出的 TOCTOU 竞态：检查通过后、获取桶锁之前，`fw_exit` 可能已在另一 CPU 上完成清表 | 🔴 |
+| M-148 | `kernel-module/fw_ban.c:377` | `fw_ban_exit` 使用非同步 `timer_delete` 存在理论竞态，依赖精巧的推理链保证安全性，但缺乏详细注释 | 🔴 |
+| M-149 | `kernel-module/fw_rate.c:554-575` | `fw_rate_roll` 跨 CPU 累加 `cur_packets` 等无溢出保护，高 CPU 数系统上可能溢出 `u64` | 🔴 |
+
 
 ---
 
-## LOW 级（152 项）
+## LOW 级（197 项）
 
 ### 内核模块（6 项）
 | # | 文件 | 问题 |
@@ -1089,6 +1145,24 @@
 | L-78 | `frontend/src/lib/defaults.ts:46`：`EMPTY_CHART` 常量与 `emptyChartData()` 函数并存，消费方可能混淆 |
 | L-79 | `frontend/src/views/Login.tsx:33-38`：`useEffect` 依赖数组包含 `location.state`，每次导航可能产生新引用触发不必要的 effect |
 | L-80 | `contract/verify_http.py:2086-2088`：`_GAP_RULES` 正则使用全角右括号 `[^）]*`，但问题文本中是半角 `)`，导致正则永远匹配不到 |
+
+### 第四轮扫描补充（内核 LOW 4 项）
+| # | 问题 |
+|---|------|
+| L-81 | `kernel-module/fw_netlink.c:130`：`fw_nl_begin` 的 `payload` 参数从 `size_t` 静默截断为 `u16`，当前所有调用点有编译期校验，但未来新增消息类型时可能忘记校验 |
+| L-82 | `kernel-module/fw_ban.c:473-475 + 483-484 + 508`：`fw_ban_insert` 在桶锁内执行 `kzalloc(GFP_ATOMIC)` 后的分配失败路径存在冗余分配，高并发场景下增加内存碎片化压力 |
+| L-83 | `kernel-module/fw_state.c:568`：`remaining` 校验使用 `unsigned long` 而非 `u32`，32 位平台上类型隐式关系不够清晰 |
+| L-84 | `kernel-module/fw_wl.c:180`：`fw_wl_add` 容量检查使用 `atomic_read` 而非 `atomic_inc_return`，与 `fw_ban_insert` 的模式不一致，增加代码审查认知负担 |
+
+### 第四轮扫描补充（前端 LOW 6 项）
+| # | 问题 |
+|---|------|
+| L-85 | `frontend/src/views/Dashboard.tsx:118-119`：`chartEmpty` 是纯函数但在组件体内定义，每次渲染重新创建 |
+| L-86 | `frontend/src/views/Whitelist.tsx:394`：推荐表格的 `rowKey` 使用内联箭头函数，每次渲染创建新函数引用 |
+| L-87 | `frontend/src/views/Bans.tsx:696-698`：`BanDetailDrawer` 使用 `key={detailIp}`，切换 IP 时旧抽屉完全卸载、新抽屉完全挂载，触发新的 `useAsync` 请求 |
+| L-88 | `frontend/src/views/Analysis.tsx:337-364`：`activeRefreshing` 的计算使用同步 switch 语句，每次渲染时执行，增加渲染路径长度 |
+| L-89 | `frontend/src/views/Logs.tsx:146-148`：`useEffect` 依赖了 `dropped`（自己设置的状态）和 `liveLines`（频繁变化），每次 `liveLines` 变化都触发 effect 执行比较 |
+| L-90 | `frontend/src/views/Ddos.tsx:208-219`：`Tabs` 使用 `defaultActiveKey` 而非受控的 `activeKey`，父组件无法在外部控制或响应 Tab 变化 |
 
 
 ---
