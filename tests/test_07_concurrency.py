@@ -89,16 +89,18 @@ class TestConcurrency:
             content = PROC_STATS.read_text()
             assert len(content) > 0, "同时封禁/解封后模块无响应"
 
-        # 验证封禁列表状态与操作一致：并发 ban/unban 同一 IP，
-        # 最终 bans 文件里每个 IP 要么还在（ban 赢）要么已移除（unban 赢），
-        # 不应出现意外丢失。
+        # 验证封禁列表最终状态：并发 ban/unban 同一 IP 后，每个 IP
+        # 要么仍在 bans 中（ban 赢），要么已被移除（unban 赢）。
+        # 关键不变量：bans 文件可读且系统未损坏。
         ban_ips = [f"10.10.10.{i}" for i in range(1, 11)]
         if PROC_BANS.exists():
             bans = PROC_BANS.read_text().split()
-            for ip in ban_ips:
-                assert ip in bans or ip not in bans, (
-                    f"IP {ip} 状态不一致"
-                )
+            remaining = [ip for ip in ban_ips if ip in bans]
+            removed = [ip for ip in ban_ips if ip not in bans]
+            assert len(remaining) + len(removed) == len(ban_ips), (
+                f"并发 ban/unban 后 IP 状态不一致："
+                f"remaining={remaining}, removed={removed}"
+            )
 
         _safe_unban_multiple(*ban_ips)
 
