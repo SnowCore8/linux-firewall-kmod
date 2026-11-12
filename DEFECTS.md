@@ -638,6 +638,28 @@
 - **问题**: 传入 `onClick` 时 Card 变为可点击但缺少 `role="button"`、`tabIndex={0}` 和 `onKeyDown`，键盘用户无法操作
 - **修复**: 添加 `role="button"`、`tabIndex={0}`、`onKeyDown` 处理 Enter/Space
 
+### 第四轮扫描补充（前端 HIGH 4 项）
+
+### H-84 🔴 Analysis.tsx tabItems 的 useMemo 依赖约 50 个字段导致记忆化失效
+- **文件**: `frontend/src/views/Analysis.tsx:303-333`
+- **问题**: `tabItems` 的 `useMemo` 依赖数组包含 8 个分区组件的 `data`/`isLoading`/`error`/`refetch`/`isUserFetching` 共约 50 个字段。任何一个分区取数状态变化都会导致整个数组重建，即重新创建全部 8 个 JSX 子树。这实质上让 `useMemo` 退化为无记忆化
+- **修复**: 将每个分区组件改为自行接收 `UseAsyncResult` 对象并在内部做 `useMemo`；`tabItems` 的 `useMemo` 只依赖 `[openIp]` 及各个 section 组件引用
+
+### H-85 🔴 Jails.tsx columns 依赖 toggling 状态导致过度重计算
+- **文件**: `frontend/src/views/Jails.tsx:143-246`
+- **问题**: `columns` 的 `useMemo` 依赖了 `toggling` 状态对象。任何一条 jail 的 Switch 切换都会产生新的 `toggling` 引用，导致整张表的列定义全部重建。实际上列定义中只用到了 `toggling[record.name]`，这是 render 时动态读取的
+- **修复**: 将 `toggling` 从 `columns` 的 `useMemo` 依赖中移除，改为在 render 函数内通过 ref 读取
+
+### H-86 🔴 Bans.tsx columns 依赖 query.lastUpdatedAt 导致过度重计算
+- **文件**: `frontend/src/views/Bans.tsx:381-463`
+- **问题**: `columns` 的 `useMemo` 依赖了 `query.lastUpdatedAt`。每次 REST 请求成功都会导致列定义全部重建。但列定义中只有 `RemainingCell` 的 `fetchedAt` prop 用到了该值
+- **修复**: 将 `query.lastUpdatedAt` 从 `columns` 的 `useMemo` 依赖中移除，`RemainingCell` 的 `fetchedAt` 改为通过 ref 获取最新值
+
+### H-87 🔴 Dashboard.tsx StatCard 的 onClick 使用内联箭头函数
+- **文件**: `frontend/src/views/Dashboard.tsx:196-224`
+- **问题**: 4 个 `StatCard` 的 `onClick` 属性使用内联箭头函数，每次渲染都创建新的函数引用，触发不必要的 DOM diff
+- **修复**: 将导航回调用 `useCallback` 包裹，或给 `StatCard` 传 `href` 而非 `onClick`
+
 ---
 
 ## MEDIUM 级（172 项）
