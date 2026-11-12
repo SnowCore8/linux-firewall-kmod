@@ -14,6 +14,11 @@ import (
 //
 // 返回指定 IP 的多维风险向量。仅在 risk_engine.enabled=true 时可用。
 func (h *APIHandlers) RiskVectors(w http.ResponseWriter, r *http.Request) {
+	if cfg := h.currentConfig(); cfg == nil || !cfg.RiskEngine.Enabled {
+		WriteServiceUnavailable(w, "risk engine is disabled")
+		return
+	}
+
 	if h.db == nil {
 		WriteServiceUnavailable(w, "risk engine not initialized")
 		return
@@ -62,6 +67,11 @@ func (h *APIHandlers) RiskVectors(w http.ResponseWriter, r *http.Request) {
 // 返回所有 IP 的风险向量列表（按总风险降序，最多 100 条）。total 是表内全集条数，
 // 不是本次返回的条数。
 func (h *APIHandlers) ListRiskVectors(w http.ResponseWriter, r *http.Request) {
+	if cfg := h.currentConfig(); cfg == nil || !cfg.RiskEngine.Enabled {
+		WriteServiceUnavailable(w, "risk engine is disabled")
+		return
+	}
+
 	if h.db == nil {
 		WriteServiceUnavailable(w, "risk engine not initialized")
 		return
@@ -118,6 +128,11 @@ func (h *APIHandlers) ListRiskVectors(w http.ResponseWriter, r *http.Request) {
 // 分页下推到 SQL：读侧只取一页，不再把该 IP 的整段历史读进内存再截断。total 是
 // 该 IP 的全部事件数（过滤条件之后的全集），不是本次返回的条数。
 func (h *APIHandlers) RiskEvents(w http.ResponseWriter, r *http.Request) {
+	if cfg := h.currentConfig(); cfg == nil || !cfg.RiskEngine.Enabled {
+		WriteServiceUnavailable(w, "risk engine is disabled")
+		return
+	}
+
 	if h.db == nil {
 		WriteServiceUnavailable(w, "risk engine not initialized")
 		return

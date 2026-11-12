@@ -62,7 +62,9 @@ func (db *DB) RecordBanEvent(ip, jailName string, banCount int, isPermanent bool
 	if durationSecs != nil {
 		duration = sql.NullInt64{Int64: *durationSecs, Valid: true}
 	}
-	_, err := db.conn.Exec(
+	ctx, cancel := db.queryCtx()
+	defer cancel()
+	_, err := db.conn.ExecContext(ctx,
 		`INSERT INTO ban_events (ip, jail_name, banned_at, ban_count, is_permanent, created_at, duration_secs)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		ip, jailName, now, banCount, boolToInt(isPermanent), now, duration,
