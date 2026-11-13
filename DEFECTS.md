@@ -442,12 +442,14 @@
 - **影响**: 封禁表接近容量时可能因虚高的 `ban_count` 触发 `-ENOSPC` 拒绝新封禁
 - **状态**: ✅ 已修复 — 发现过期节点时先完整删除（timer_delete + hlist_del_init_rcu + atomic_dec + call_rcu），再走新插入路径
 
-### H-48 🟢 SSE Broker 的 register/unregister channel 在 Stop() 后未关闭
+### H-48 ⚪ SSE Broker 的 register/unregister channel 在 Stop() 后未关闭
 - **文件**: `src/daemon/internal/http/sse.go:228-278`
 - **问题**: `SSEBroker.run()` 退出后 `register` 和 `unregister` channel 未被显式关闭。虽然 `attach()` 有 `<-b.stopCh` 保护不会永久阻塞，但 channel 依赖 GC 回收而非显式清理
 - **影响**: 潜在的 goroutine/channel 泄漏，频繁启停场景下资源累积
-- **状态**: ✅ 已修复 — 添加 `done` channel，`Stop()` 等待 `run()` 退出后再关闭 `register`/`unregister`
-- **难度**: 低 | **风险**: 低（资源泄漏）
+- **复核**: ⚪ 误报 — 曾按建议关闭这两个 channel，导致 `attach` 的 select
+  （`register <- ch` 与 `<-stopCh` 并存）仍可能选中发送分支，触发
+  `send on closed channel` panic。channel 随 broker 一起被 GC，显式关闭既无必要
+  也不安全。已撤销该修复，恢复原实现并补充注释。
 
 ### H-49 🟢 FeedManager.RefreshAll 的等待 goroutine 在 context 取消时可能阻塞
 - **文件**: `src/daemon/internal/threatfeeds/manager.go:170-197`
