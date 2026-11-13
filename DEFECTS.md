@@ -11,10 +11,10 @@
 | 严重度 | 发现总数 | 已修复 | 待修复 |
 |--------|----------|--------|--------|
 | CRITICAL | 5 | 4 | 1 |
-| HIGH | 103 | 78 | 24 |
+| HIGH | 103 | 82 | 20 |
 | MEDIUM | 222 | 100 | 111 |
 | LOW | 225 | 34 | 190 |
-| **合计** | **555** | **216** | **326** |
+| **合计** | **555** | **220** | **322** |
 
 另有 13 项经复核为误报或设计取舍（标 ⚪），不计入待修复：H-6、M-1、M-2、M-3、M-10、M-14、M-22、M-B7、M-D1、M-D4、M-D5、M-E2、L-E4。
 
@@ -730,29 +730,33 @@
 
 ### 第六轮扫描补充（日志系统与 GeoIP HIGH 4 项）
 
-### H-98 🔴 GeoIP 出口探测缺乏重试逻辑
+### H-98 🟢 GeoIP 出口探测缺乏重试逻辑
 - **文件**: `src/daemon/internal/geoip/egress.go:30-89`
 - **问题**: `DetectEgress` 函数仅执行单次 HTTP 请求，无重试机制。网络瞬断、DNS 解析暂时失败、探测服务短暂不可用等情况都会导致出口 IP 探测永久失败
 - **影响**: 10 秒超时后直接返回错误，调用方无法获得有效的出口 IP 用于 GeoIP 定位
-- **修复**: 实现指数退避重试（如 3 次重试，间隔 1s/2s/4s），或使用多个备用探测服务（如 ipify、ifconfig.co、ipinfo.io）进行故障切换
+- **状态**: ✅ 已修复 — 拆出 `probeEgressOnce`；传输层错误与 5xx/429 按 300ms/600ms
+  指数退避重试，最多 3 次；4xx 与解析失败立即返回，ctx 取消时终止
 
-### H-99 🔴 inotify watch 数量限制未处理
+### H-99 🟢 inotify watch 数量限制未处理
 - **文件**: `src/daemon/internal/ingest/watcher.go:82-88`, `src/daemon/internal/runtime/executor.go:970-974`
 - **问题**: `Watcher.Add` 调用 `unix.InotifyAddWatch` 时未处理 `ENOSPC` 错误（inotify watches 耗尽）。Linux 默认 `fs.inotify.max_user_watches=8192`，监控大量日志文件时可能静默失败
 - **影响**: `addSharedLogSource` 中 watch 添加失败仅记录 warn 日志并返回，但该日志源会永久丢失监控，直到下次重扫（60 秒）才可能恢复
-- **修复**: 检测 `ENOSPC` 错误时主动告警并建议用户调高 `fs.inotify.max_user_watches`；在启动时检查当前 watch 使用量，接近上限时提前预警
+- **状态**: ✅ 已修复 — 新增 `ingest.IsWatchesExhausted`（ENOSPC 判定）；配额耗尽时
+  给出带 `fs.inotify.max_user_watches` 处置建议的明确告警
 
-### H-100 🔴 正则表达式双重编译导致安全校验可被绕过
+### H-100 🟢 正则表达式双重编译导致安全校验可被绕过
 - **文件**: `src/daemon/internal/jail/compile.go:90`, `src/daemon/internal/logparse/rule.go:42-47`, `src/daemon/internal/runtime/executor.go:1524`
 - **问题**: `CompileJailRegexesWithWarnings` 在 compile.go:90 先做安全校验后编译正则，但 `BuildRuleSet` 和 `ruleSetFor` 又调用 `logparse.NewRule`，该函数内部再次调用 `regexp.Compile(pattern)`。虽然注释声称"只搬 Compiled != nil 的条目"，但 `NewRule` 会用原始 pattern 重新编译
 - **影响**: 若安全校验通过后 pattern 被篡改（如配置文件热重载竞态），或 `NewRule` 编译失败导致行为不一致，可能引入风险。更重要的是，双重编译浪费 CPU 资源
-- **修复**: `NewRule` 应接受已编译的 `*regexp.Regexp` 而非重新编译，或将安全校验与编译合并为单一操作，避免重复编译
+- **状态**: ✅ 已修复 — 新增 `logparse.NewRuleFromRegexp`，`BuildRuleSet` 与
+  `ruleSetFor` 直接搬运已编译的 `*regexp.Regexp`，不再二次编译
 
-### H-101 🔴 GeoIP 数据库全量加载到内存
+### H-101 🟢 GeoIP 数据库全量加载到内存
 - **文件**: `src/daemon/internal/geoip/geoip.go:56-60`
 - **问题**: `Open` 函数使用 `os.ReadFile` 将整个 MMDB 文件读入内存。MaxMind City 数据库通常 50-100 MB，GeoIP2 完整版可达数百 MB
 - **影响**: 对于内存受限的嵌入式场景或同时加载多个数据库时，可能导致 OOM 或触发频繁 GC
-- **修复**: 使用 `mmap` 或 `os.Open` + `ReadAt` 实现按需读取，仅加载元数据和查询路径上的节点
+- **状态**: ✅ 已修复 — `Open` 改用 `unix.Mmap`（PROT_READ/MAP_SHARED），`Close`
+  时 `Munmap`；页按访问惰性调入，不再常驻堆
 
 ---
 
