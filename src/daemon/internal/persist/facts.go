@@ -82,10 +82,15 @@ type factsEntry struct {
 	scoreLoaded bool
 	// scoreLoadedAt 是上次从库对齐分数的时间；重载按 reloadEvery 判断是否过期。
 	scoreLoadedAt time.Time
+	// dbScoreLoaded 标记是否已从 DB 读取过信誉分（与 scoreLoaded 分开，
+	// 让 NoteBan 能在 DB 读取前捕获"是否已加载"状态）。
+	dbScoreLoaded bool
 	pending       uint32
 
 	bans       uint32
 	bansLoaded bool
+	// dbBansLoaded 标记是否已从 DB 读取过封禁次数。
+	dbBansLoaded bool
 }
 
 // Facts 是 runtime.DecisionFacts 的生产实现。
@@ -279,27 +284,43 @@ func (f *Facts) touchLocked(ip string) (*factsEntry, *factsEntry) {
 	return e, evicted
 }
 
-// loadScoreLocked 标记条目已加载并设默认分（未知 IP 按满分起算）。
-// 数据库读取在锁外由 loadScoreFromDB 完成，避免持 f.mu 期间做 I/O。
+// loadScoreLocked 标记条目已加载信誉分（仅设置标志，不做 I/O）。
+// 幂等：已加载则不重复刷新 scoreLoadedAt，否则 reloadScores 永远看不到过期条目。
 func (f *Facts) loadScoreLocked(e *factsEntry) {
 	if e.scoreLoaded {
 		return
 	}
 	e.scoreLoaded = true
 	e.scoreLoadedAt = time.Now()
-	e.score = fullReputation
 }
 
 // loadScoreFromDB 在锁外读取信誉分并应用到条目。
-// 遵循 reloadScores 的公式：有效分 = clamp(库中分) - pending，保持「内存分 = 库分 - 待落盘量」。
-// 重新加锁后校验条目仍在索引中且未被替换，避免把过期读数套到新条目上。
+// 使用 dbScoreLoaded 标志避免重复读取，同时不影响 NoteBan 对 scoreLoaded 的判断。
 func (f *Facts) loadScoreFromDB(e *factsEntry) {
+	// 快速路径：已从 DB 加载过则跳过。
+	f.mu.Lock()
+	if e.dbScoreLoaded {
+		f.mu.Unlock()
+		return
+	}
+	f.mu.Unlock()
+
 	if f.db == nil {
+		// 无 DB 时直接标记已从 DB 加载，设默认满分。
+		f.mu.Lock()
+		if !e.dbScoreLoaded {
+			e.score = fullReputation
+			e.dbScoreLoaded = true
+		}
+		f.mu.Unlock()
 		return
 	}
 	rep, err := f.db.GetIPReputation(e.ip)
 	if err != nil {
 		f.logger.Warn("读取信誉分失败，按满分处理", "ip", e.ip, "error", err)
+		f.mu.Lock()
+		e.dbScoreLoaded = true
+		f.mu.Unlock()
 		return
 	}
 	dbScore := uint32(fullReputation)
@@ -308,40 +329,57 @@ func (f *Facts) loadScoreFromDB(e *factsEntry) {
 	}
 	f.mu.Lock()
 	if cur, ok := f.index[e.ip]; ok && cur.Value.(*factsEntry) == e {
-		if e.pending > dbScore {
-			e.score = 0
-		} else {
-			e.score = dbScore - e.pending
+		if !e.dbScoreLoaded {
+			if e.pending > dbScore {
+				e.score = 0
+			} else {
+				e.score = dbScore - e.pending
+			}
+			e.dbScoreLoaded = true
 		}
-		e.scoreLoadedAt = time.Now()
 	}
 	f.mu.Unlock()
 }
 
-// loadBansLocked 标记条目已加载封禁次数。
+// loadBansLocked 标记条目已加载封禁次数（仅设置标志，不做 I/O）。
 // 数据库读取在锁外由 loadBansFromDB 完成，避免持 f.mu 期间做 I/O。
 func (f *Facts) loadBansLocked(e *factsEntry) {
-	if e.bansLoaded {
-		return
-	}
 	e.bansLoaded = true
 }
 
 // loadBansFromDB 在锁外读取封禁次数并应用到条目。
-// 重新加锁后校验条目仍在索引中且未被替换。
+// 如果条目已从 DB 加载过（dbLoaded=true），则跳过，避免覆盖 NoteBan 的自增结果。
 func (f *Facts) loadBansFromDB(e *factsEntry) {
+	// 快速路径：已从 DB 加载过则跳过。
+	f.mu.Lock()
+	if e.dbBansLoaded {
+		f.mu.Unlock()
+		return
+	}
+	f.mu.Unlock()
+
 	if f.db == nil {
+		// 无 DB 时直接标记已从 DB 加载（按 0 次处理）。
+		f.mu.Lock()
+		e.dbBansLoaded = true
+		f.mu.Unlock()
 		return
 	}
 	h, err := f.db.GetBanHistory(e.ip)
 	if err != nil {
 		f.logger.Warn("读取封禁历史失败，按零次处理", "ip", e.ip, "error", err)
+		f.mu.Lock()
+		e.dbBansLoaded = true
+		f.mu.Unlock()
 		return
 	}
 	f.mu.Lock()
 	if cur, ok := f.index[e.ip]; ok && cur.Value.(*factsEntry) == e {
-		if h != nil && h.BanCount > 0 {
-			e.bans = uint32(h.BanCount)
+		if !e.dbBansLoaded {
+			if h != nil && h.BanCount > 0 {
+				e.bans = uint32(h.BanCount)
+			}
+			e.dbBansLoaded = true
 		}
 	}
 	f.mu.Unlock()
@@ -588,13 +626,13 @@ func (f *Facts) NoteBan(addr netip.Addr) {
 	f.mu.Lock()
 	e, evicted := f.touchLocked(ip)
 	// 库侧的这次封禁已经由 RecordBanHistory/RecordBan 落好了，因此「本次封禁前是否
-	// 已经有内存读数」决定了要不要自增：
-	//   - 已加载的条目记的是封禁前的值，落库后库值比内存新一次，必须增量；
-	//   - 新建或尚未加载的条目读到的就是**封禁后**的库值，再自增会把同一次封禁记两遍
-	//     （条目在落库与 NoteBan 之间被 LRU 逐出，就是这个形状）。
-	// 无库时没有那笔落库，始终按内存增量。
-	hadScore := e.scoreLoaded
-	hadBans := e.bansLoaded
+	// 已经从 DB 加载过」决定了要不要自增：
+	//   - 已从 DB 加载过（dbBansLoaded=true）：内存值是封禁前的旧值，DB 已包含本次，需要自增
+	//   - 未从 DB 加载过：loadBansFromDB 会读取包含本次封禁的 DB 值，不应再自增
+	//   - 无 DB：始终按内存增量
+	// 关键：必须在 loadBansFromDB 调用之前捕获状态！
+	hadBansFromDB := e.dbBansLoaded
+	hadScoreFromDB := e.dbScoreLoaded
 	f.loadScoreLocked(e)
 	f.loadBansLocked(e)
 	f.mu.Unlock()
@@ -609,13 +647,10 @@ func (f *Facts) NoteBan(addr netip.Addr) {
 	if cur, ok := f.index[ip]; ok {
 		e = cur.Value.(*factsEntry)
 	}
-	// 重新检查加载状态：loadScoreFromDB/loadBansFromDB 可能已设置。
-	hadScore = hadScore || e.scoreLoaded
-	hadBans = hadBans || e.bansLoaded
-	if hadBans || f.db == nil {
+	if hadBansFromDB || f.db == nil {
 		e.bans++
 	}
-	if hadScore || f.db == nil {
+	if hadScoreFromDB || f.db == nil {
 		if pen := uint32(DefaultBanPenalty); e.score > pen {
 			e.score -= pen
 		} else {

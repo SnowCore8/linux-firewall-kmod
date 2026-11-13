@@ -11,10 +11,19 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/risk"
 )
+
+// riskEnabledConfig 返回启用了风险引擎的配置，供风险端点测试使用：
+// H-97 之后这三个端点会先检查 risk_engine.enabled，未启用回 503。
+func riskEnabledConfig() *config.Config {
+	cfg := config.Default()
+	cfg.RiskEngine.Enabled = true
+	return &cfg
+}
 
 // riskEventsPath 从契约的注册串拼出可请求路径，避免测试里复制第二份路径。
 func riskEventsPath(ip string) string {
@@ -40,7 +49,10 @@ func TestRiskEventsPaginatesAndReportsFullTotal(t *testing.T) {
 	// 另一个 IP 的事件不能混进过滤后的总数。
 	seedRiskEvents(t, db, "203.0.113.31", 3)
 
-	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
+	s, _ := newTestServer(t, func(cfg *APIConfig) {
+		cfg.DB = db
+		cfg.GetCurrentConfig = riskEnabledConfig
+	})
 	base := riskEventsPath(ip)
 
 	// 默认页：最多 100 条，按时间降序（最新的是 id=130）。
@@ -104,7 +116,10 @@ func TestListRiskVectorsReportsFullTotal(t *testing.T) {
 		}
 	}
 
-	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
+	s, _ := newTestServer(t, func(cfg *APIConfig) {
+		cfg.DB = db
+		cfg.GetCurrentConfig = riskEnabledConfig
+	})
 	path := strings.TrimPrefix(httpcontract.RouteGetApiV2RiskVectors, "GET ")
 	got := get[RiskVectorListResponse](t, s, path)
 

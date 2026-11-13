@@ -179,9 +179,6 @@ type SSEBroker struct {
 	broadcast  chan []byte
 	stopCh     chan struct{}
 	stopOnce   sync.Once
-	// done 在 run() 退出时关闭，Stop() 据此等待扇出循环真正退出后再关闭
-	// register/unregister，避免向已关闭的 channel 发送。
-	done chan struct{}
 	// stopped 在 clientsMu 下读写：它让 run() 的扇出与 Stop() 的 close 互斥，
 	// 不然 select 会在「stopCh 已关闭」与「广播帧正好可读」之间任选一个。
 	stopped bool
@@ -201,7 +198,6 @@ func NewSSEBroker(name string, maxClients int, keepaliveSecs int, logger *slog.L
 		unregister: make(chan chan []byte),
 		broadcast:  make(chan []byte, 256),
 		stopCh:     make(chan struct{}),
-		done:       make(chan struct{}),
 	}
 
 	go broker.run()
@@ -223,10 +219,9 @@ func (b *SSEBroker) Stop() {
 	}
 	b.clients = make(map[chan []byte]bool)
 	b.clientsMu.Unlock()
-	// 等待 run() 退出后再关闭 register/unregister，避免向已关闭的 channel 发送。
-	<-b.done
-	close(b.register)
-	close(b.unregister)
+	// 不关闭 register/unregister：attach/detach 的 select 与 stopCh 并存，关闭后
+	// 发送分支仍可能被选中而 panic（send on closed channel）。channel 本身随 broker
+	// 一起被 GC，不需要显式关闭。
 }
 
 // run 是唯一的注册/注销/广播循环。
@@ -234,7 +229,7 @@ func (b *SSEBroker) Stop() {
 // 名额判定已在 ServeHTTP 的 Acquire 里完成（那条路径与广播无关），这里只维护扇出
 // 登记表；写不进去的慢客户端被摘掉，名额随之释放。
 func (b *SSEBroker) run() {
-	defer close(b.done)
+
 	for {
 		select {
 		case <-b.stopCh:

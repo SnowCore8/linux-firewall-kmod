@@ -312,6 +312,9 @@ type InboundExecutor struct {
 	// mainDone 在 Run() 退出时关闭，Close() 据此等待主循环退出后再关闭 watcher，
 	// 避免与 poll() 中正在阻塞的 unix.Poll 产生 fd 竞态。
 	mainDone chan struct{}
+	// started 在 Run() 进入时关闭。Close() 只有确认 Run 曾启动才需要等 mainDone；
+	// 测试与部分装配路径只构造不 Run，直接等 mainDone 会永久阻塞。
+	started chan struct{}
 }
 
 // NewInboundExecutor 装配执行体：编译 jail 规则集、挂上初始 watch。
@@ -352,6 +355,7 @@ func NewInboundExecutor(cfg *config.Config, signals *SignalSource, deps Deps) (*
 		rejectionTTL: dispatchRejectionCooldown,
 		pendingReadd: make(map[string]struct{}),
 		mainDone:     make(chan struct{}),
+		started:      make(chan struct{}),
 	}
 	t, err := newTimers(time.Now())
 	if err != nil {
@@ -379,7 +383,13 @@ func NewInboundExecutor(cfg *config.Config, signals *SignalSource, deps Deps) (*
 // unix.Poll 与被关闭的 inotify fd 之间产生竞态：关闭后的 fd 号可能被内核重新分配，
 // poll 在新 fd 上继续等待或读到错误，行为不可预测。
 func (e *InboundExecutor) Close() {
-	<-e.mainDone
+	// 只有 Run 启动过才需要等它退出后再关 watcher；未启动（测试、部分装配路径）
+	// 直接清理，否则会永久阻塞在 mainDone 上。
+	select {
+	case <-e.started:
+		<-e.mainDone
+	default:
+	}
 	_ = e.watcher.Close()
 	if e.signals != nil {
 		e.signals.Close()
@@ -397,6 +407,7 @@ func (e *InboundExecutor) Close() {
 // 根会永远阻塞在 join 上，而本协程已经退出。
 func (e *InboundExecutor) Run(stop, terminate *Shutdown) {
 	defer close(e.mainDone)
+	close(e.started)
 	for !stop.IsShutdown() {
 		timeout := e.nextPollTimeout(time.Now())
 		if err := e.step(timeout, stop, terminate); err != nil {
