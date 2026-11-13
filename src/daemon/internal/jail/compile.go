@@ -124,6 +124,9 @@ func ResetRegexes(j *config.Jail) {
 // [`CompileJailRegexes`]，未通过的条目 `Compiled == nil`，若在这里按模式串重新
 // 编译就会被「救活」，等于绕过安全闸门。
 //
+// 直接搬运已编译的 *regexp.Regexp，不再按模式串二次编译：既省掉重复的编译开销，
+// 也避免「校验之后模式串被改写、这里却按新串编译」的旁路。
+//
 // 因此「配置里给了空模式」会得到一个零规则的规则集，此时只剩关键字回退——这是
 // 有意的行为，不是遗漏。
 func BuildRuleSet(j *config.Jail) *logparse.RuleSet {
@@ -133,8 +136,8 @@ func BuildRuleSet(j *config.Jail) *logparse.RuleSet {
 		if info.Compiled == nil {
 			continue
 		}
-		rule, err := logparse.NewRule(info.Name, info.Pattern)
-		if err != nil {
+		rule := logparse.NewRuleFromRegexp(info.Name, info.Compiled)
+		if rule == nil {
 			continue
 		}
 		rules = append(rules, rule)

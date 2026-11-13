@@ -87,6 +87,15 @@ func (w *Watcher) Add(path string, mask uint32) (int32, error) {
 	return int32(wd), nil
 }
 
+// IsWatchesExhausted 报告 Add 的错误是否因为 inotify watch 配额耗尽（ENOSPC）。
+//
+// 内核在 `fs.inotify.max_user_watches` 用尽时返回 ENOSPC；这不是「这个路径有问题」，
+// 而是整个进程再挂任何 watch 都会失败。调用方应给出可操作的告警（调高 sysctl），
+// 而不是当成单文件失败反复重试。
+func IsWatchesExhausted(err error) bool {
+	return errors.Is(err, unix.ENOSPC)
+}
+
 // Remove 摘除一个 watch。wd 已失效时返回底层错误，调用方通常只记日志。
 func (w *Watcher) Remove(wd int32) error {
 	_, err := unix.InotifyRmWatch(w.fd, uint32(wd))

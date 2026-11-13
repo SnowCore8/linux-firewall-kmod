@@ -16,8 +16,12 @@ import (
 const (
 	// egressBodyLimit 是探测响应的最大读取字节数。
 	egressBodyLimit = 1 << 20
-	// egressTimeout 是探测请求的总超时。
+	// egressTimeout 是单次探测请求的总超时。
 	egressTimeout = 10 * time.Second
+	// egressAttempts 是探测的最大尝试次数（含首次）。
+	egressAttempts = 3
+	// egressRetryBase 是首次重试前的等待，之后按倍数递增（300ms、600ms）。
+	egressRetryBase = 300 * time.Millisecond
 )
 
 // egressKeys 是探测响应中可接受公网 IP 的键，按优先级排列。
@@ -26,7 +30,10 @@ var egressKeys = []string{"ip", "query", "address"}
 // DetectEgress 请求 probeURL 并返回响应 JSON 中报告的公网出口 IP。
 // 依次尝试 "ip"、"query"、"address" 三个键，第一个可解析且属于公网单播地址的 IP 胜出；
 // 私有、环回、链路本地等地址会被跳过，不会污染服务器定位数据。
-// 只接受 http/https，响应体上限 1 MiB，遵守调用方 ctx，客户端超时 10 秒。
+// 只接受 http/https，响应体上限 1 MiB，遵守调用方 ctx，单次请求超时 10 秒。
+//
+// 传输层错误（连不上、DNS 暂时失败、超时）与 5xx/429 会按指数退避重试，最多
+// egressAttempts 次；4xx、解析失败等确定性错误立即返回，不浪费时间重试。
 func DetectEgress(ctx context.Context, probeURL string) (netip.Addr, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -42,34 +49,62 @@ func DetectEgress(ctx context.Context, probeURL string) (netip.Addr, error) {
 		return netip.Addr{}, errors.New("geoip: probe URL has no host")
 	}
 
+	client := &http.Client{Timeout: egressTimeout}
+	var lastErr error
+	for attempt := 0; attempt < egressAttempts; attempt++ {
+		if attempt > 0 {
+			delay := egressRetryBase << (attempt - 1)
+			select {
+			case <-ctx.Done():
+				return netip.Addr{}, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		addr, retryable, err := probeEgressOnce(ctx, client, probeURL)
+		if err == nil {
+			return addr, nil
+		}
+		lastErr = err
+		if !retryable || ctx.Err() != nil {
+			break
+		}
+	}
+	return netip.Addr{}, lastErr
+}
+
+// probeEgressOnce 执行一次探测；retryable 表示该错误是否值得重试。
+func probeEgressOnce(ctx context.Context, client *http.Client, probeURL string) (netip.Addr, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
-		return netip.Addr{}, fmt.Errorf("geoip: build probe request: %w", err)
+		return netip.Addr{}, false, fmt.Errorf("geoip: build probe request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: egressTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
-		return netip.Addr{}, fmt.Errorf("geoip: probe request failed: %w", err)
+		// 传输层失败：网络瞬断、DNS 暂时失败、连接超时都可能在重试后成功。
+		// 调用方主动取消（ctx.Err() != nil）不重试，由外层统一判断。
+		return netip.Addr{}, true, fmt.Errorf("geoip: probe request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return netip.Addr{}, fmt.Errorf("geoip: probe returned status %d", resp.StatusCode)
+		// 5xx 与 429 视为探测服务的瞬时故障；其余 4xx 是确定性拒绝。
+		retryable := resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests
+		return netip.Addr{}, retryable, fmt.Errorf("geoip: probe returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, egressBodyLimit+1))
 	if err != nil {
-		return netip.Addr{}, fmt.Errorf("geoip: read probe response: %w", err)
+		return netip.Addr{}, true, fmt.Errorf("geoip: read probe response: %w", err)
 	}
 	if len(body) > egressBodyLimit {
-		return netip.Addr{}, fmt.Errorf("geoip: probe response exceeds %d bytes", egressBodyLimit)
+		return netip.Addr{}, false, fmt.Errorf("geoip: probe response exceeds %d bytes", egressBodyLimit)
 	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return netip.Addr{}, fmt.Errorf("geoip: decode probe response: %w", err)
+		return netip.Addr{}, false, fmt.Errorf("geoip: decode probe response: %w", err)
 	}
 	for _, key := range egressKeys {
 		s, ok := payload[key].(string)
@@ -83,9 +118,9 @@ func DetectEgress(ctx context.Context, probeURL string) (netip.Addr, error) {
 		if !isPublicEgressAddr(addr) {
 			continue
 		}
-		return addr, nil
+		return addr, false, nil
 	}
-	return netip.Addr{}, errors.New("geoip: probe response contains no valid public IP")
+	return netip.Addr{}, false, errors.New("geoip: probe response contains no valid public IP")
 }
 
 // nonPublicPrefixes 列出标准库分类未覆盖、但同样不能当作公网出口的网段。

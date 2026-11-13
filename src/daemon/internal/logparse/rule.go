@@ -47,6 +47,18 @@ func NewRule(name, pattern string) (*Rule, error) {
 	return &Rule{name: name, compiled: re}, nil
 }
 
+// NewRuleFromRegexp 用已编译的正则构造规则，不再重新编译。
+//
+// 编译期（jail.CompileJailRegexesWithWarnings）已经做过安全校验与 regexp.Compile，
+// 构建规则集时若再按模式串编译一遍，既有 CPU 浪费，也等于给「校验后被改写的模式串」
+// 留了一条绕开安全闸门的路。re 为 nil 时返回 nil，调用方按无规则处理。
+func NewRuleFromRegexp(name string, re *regexp.Regexp) *Rule {
+	if re == nil {
+		return nil
+	}
+	return &Rule{name: name, compiled: re}
+}
+
 // tryMatch 用本规则尝试解析一行；命中返回 IP。
 //
 // 捕获组从后往前扫描：先过长度窗口与首字节 hex 检查（廉价），再做完整校验（昂贵）。

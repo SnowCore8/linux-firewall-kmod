@@ -14,6 +14,8 @@ import (
 	"os"
 	"sort"
 	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -35,8 +37,10 @@ type Location struct {
 // Reader 是一个已加载的 MMDB 文件视图。
 type Reader struct {
 	mu sync.RWMutex
-	// data 为整个文件的只读副本；Close 后置为 nil。
+	// data 是文件内容的只读视图（默认由 mmap 提供）；Close 后置为 nil。
 	data []byte
+	// mapped 表示 data 来自 mmap，Close 需要 Munmap 释放。
+	mapped bool
 
 	nodeCount  uint32
 	recordSize int
@@ -48,16 +52,44 @@ type Reader struct {
 
 // Open 打开一个 MaxMind City .mmdb 文件。
 // 空路径、不可读或格式非法的文件返回错误。
+//
+// 用 mmap 而不是把整份文件读进堆：City 库 50–100 MB、完整版数百 MB，全量读取会
+// 让常驻堆翻倍并触发频繁 GC。mmap 后页按访问惰性调入，内核可在内存紧张时回收。
+// 更新脚本用同目录 rename 原子替换，旧 inode 在映射释放前仍有效，不会 SIGBUS。
 func Open(path string) (*Reader, error) {
 	if path == "" {
 		return nil, errors.New("geoip: empty database path")
 	}
 
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("geoip: read database: %w", err)
 	}
-	return openBytes(data)
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("geoip: stat database: %w", err)
+	}
+	if info.IsDir() {
+		return nil, errors.New("geoip: database path is a directory")
+	}
+	size := info.Size()
+	if size <= 0 {
+		return nil, errors.New("geoip: empty database file")
+	}
+
+	data, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
+	if err != nil {
+		return nil, fmt.Errorf("geoip: mmap database: %w", err)
+	}
+	r, err := openBytes(data)
+	if err != nil {
+		_ = unix.Munmap(data)
+		return nil, err
+	}
+	r.mapped = true
+	return r, nil
 }
 
 func openBytes(data []byte) (*Reader, error) {
@@ -150,14 +182,22 @@ func metaUint(meta map[string]any, key string) (uint64, error) {
 	return u, nil
 }
 
-// Close 释放文件内容。重复调用安全。
+// Close 释放映射（或内存副本）。重复调用安全。
+//
+// mmap 的视图必须显式 Munmap：仅置 nil 不会把映射还给内核。
 func (r *Reader) Close() error {
 	if r == nil {
 		return nil
 	}
 	r.mu.Lock()
+	data := r.data
+	mapped := r.mapped
 	r.data = nil
+	r.mapped = false
 	r.mu.Unlock()
+	if mapped && data != nil {
+		return unix.Munmap(data)
+	}
 	return nil
 }
 

@@ -980,7 +980,14 @@ func (e *InboundExecutor) addSharedLogSource(jails []string, path string, fromSt
 	}
 	wd, err := e.watcher.Add(path, ingest.LogFileWatchMask())
 	if err != nil {
-		e.warn("添加 inotify watch 失败", "path", path, "error", err)
+		if ingest.IsWatchesExhausted(err) {
+			// 配额耗尽不是单文件问题：再挂任何 watch 都会失败，重试没有意义。
+			// 告警里给出可操作的处置，否则日志源会静默永久失联。
+			e.warn("inotify watch 配额耗尽，该日志源未被监控；请调高 fs.inotify.max_user_watches",
+				"path", path, "error", err)
+		} else {
+			e.warn("添加 inotify watch 失败", "path", path, "error", err)
+		}
 		return 0, false
 	}
 	inode := inodeOfPath(path)
@@ -1523,8 +1530,8 @@ func (e *InboundExecutor) mirrorGlobal(before, after Counters) {
 // ruleSetFor 把配置里的 jail 规则编译结果转成判定层要的 RuleSet。
 //
 // 只搬 Compiled != nil 的条目：正则的安全校验发生在编译阶段，未通过的条目若在这里按
-// 模式串重新编译就会被「救活」，等于绕过安全闸门。已编译的条目再走一次 NewRule（重载是
-// 低频操作），换来「规则集不可变、热路径零加锁」。
+// 模式串重新编译就会被「救活」，等于绕过安全闸门。直接搬运已编译的 *regexp.Regexp，
+// 不再二次编译；规则集仍不可变、热路径零加锁。
 func (e *InboundExecutor) ruleSetFor(jail *config.Jail) *logparse.RuleSet {
 	rules := make([]*logparse.Rule, 0, len(jail.Regexes))
 	for i := range jail.Regexes {
@@ -1532,9 +1539,8 @@ func (e *InboundExecutor) ruleSetFor(jail *config.Jail) *logparse.RuleSet {
 		if info.Compiled == nil {
 			continue
 		}
-		rule, err := logparse.NewRule(info.Name, info.Pattern)
-		if err != nil {
-			e.warn("跳过无法编译的规则", "jail", jail.Name, "rule", info.Name, "error", err)
+		rule := logparse.NewRuleFromRegexp(info.Name, info.Compiled)
+		if rule == nil {
 			continue
 		}
 		rules = append(rules, rule)
