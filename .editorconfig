@@ -1,0 +1,30 @@
+# 编辑器默认值：与仓库现有格式一致，不引入新的格式约束。
+# C 以 .clang-format 为准（2 空格），Go 以 gofmt 为准（制表符）。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.{c,h}]
+indent_style = space
+indent_size = 2
+
+[*.go]
+indent_style = tab
+
+[Makefile]
+indent_style = tab
+
+[*.{py,pyi}]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{png,jpg,jpeg,gif,ico,woff,woff2}]
+insert_final_newline = false

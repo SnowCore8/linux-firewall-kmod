@@ -1,0 +1,17 @@
+# 行尾统一为 LF；仓库当前没有 CRLF 文件，此规则防止新增。
+* text=auto eol=lf
+
+# 二进制产物不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ko binary
+*.deb binary
+*.gz binary
+
+# 契约生成物：由 contract/gen.py 产生，不手改，不计入语言统计
+contract/generated/** linguist-generated=true
