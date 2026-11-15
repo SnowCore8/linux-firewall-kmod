@@ -169,16 +169,16 @@ Whitelist entries: 2
 
 | 键 | 宽度 | 含义 |
 |----|------|------|
-| `total_bans` | u32 | 累计封禁次数 |
-| `total_unbans` | u32 | 累计解封次数 |
-| `whitelist_rejects` | u32 | 两处都记在这个键上：封禁请求命中白名单被拒；白名单表到条目上限被拒 |
-| `ban_table_full_rejects` | u32 | 封禁表到上限被拒的次数 |
-| `alloc_failures` | u32 | 建条目时内存分配失败的次数 |
+| `total_bans` | u64 | 累计封禁次数 |
+| `total_unbans` | u64 | 累计解封次数 |
+| `whitelist_rejects` | u64 | 两处都记在这个键上：封禁请求命中白名单被拒；白名单表到条目上限被拒 |
+| `ban_table_full_rejects` | u64 | 封禁表到上限被拒的次数 |
+| `alloc_failures` | u64 | 建条目时内存分配失败的次数 |
 | `packets_dropped` | u64 | 丢弃的数据包数 |
 | `packets_accepted` | u64 | 放行的数据包数 |
 | `tcp_anomaly_dropped` | u64 | 按 TCP 异常丢弃的包数 |
-| `cleanup_cycles` | u32 | 恒为 0，见下文 |
-| `cleanup_expired_total` | u32 | 因到期被摘除的封禁条目数 |
+| `cleanup_cycles` | u64 | 恒为 0，见下文 |
+| `cleanup_expired_total` | u64 | 因到期被摘除的封禁条目数 |
 | `current_bans` | i32 | 当前封禁条目数 |
 | `current_whitelist` | i32 | 当前白名单条目数 |
 | `recent_additions` | u32 | 当前一秒窗口内已记的封禁添加次数，泛洪限流用它判断 |
