@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 from .config import DAEMON_PATH
-from .conftest import free_tcp_port, mark_daemon_launched
+from .conftest import MAX_RETRIES_CEILING, free_tcp_port, mark_daemon_launched
 
 # 触发封禁的失败行：单个 IP 只出现一次，故单 IP 阈值不可能被触及。
 CLUSTER_PATTERN = r"probe from (?P<ip>\d+\.\d+\.\d+\.\d+)"
@@ -63,7 +63,7 @@ class TestClusterScan:
 
         config = {
             "defaults": {
-                "max_retries": 100,  # 单 IP 阈值刻意抬高：只有集群判定能触发
+                "max_retries": MAX_RETRIES_CEILING,  # 单 IP 阈值刻意抬高：只有集群判定能触发
                 "findtime": 600,
                 "ban_time": 300,
                 "interval": 1,
@@ -73,7 +73,7 @@ class TestClusterScan:
                 "probe": {
                     "enabled": True,
                     "log_files": [str(log)],
-                    "max_retries": 100,
+                    "max_retries": MAX_RETRIES_CEILING,
                     "findtime": 600,
                     "ban_time": 300,
                     "regexes": {"default": {"pattern": CLUSTER_PATTERN}},

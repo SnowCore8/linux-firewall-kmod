@@ -21,6 +21,7 @@ import pytest
 
 from .config import DAEMON_PATH, PROJECT_ROOT
 from .conftest import (
+    MAX_RETRIES_CEILING,
     free_tcp_port,
     generate_test_yaml,
     http_basic_request,
@@ -108,7 +109,7 @@ class TestAuthLockout:
         generate_test_yaml(
             str(cfg_path),
             str(log_file),
-            max_retries=100,
+            max_retries=MAX_RETRIES_CEILING,
             findtime=600,
             ban_time=60,
             metrics_port=port,

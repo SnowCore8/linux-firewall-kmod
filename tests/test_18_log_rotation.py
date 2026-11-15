@@ -18,6 +18,7 @@ import time
 import pytest
 
 from .config import DAEMON_PATH
+from .conftest import MAX_RETRIES_CEILING
 from .conftest import (
     free_tcp_port,
     generate_test_yaml,
@@ -95,7 +96,7 @@ class TestLogRotation:
         generate_test_yaml(
             str(cfg_path),
             str(log_file),
-            max_retries=100,
+            max_retries=MAX_RETRIES_CEILING,
             findtime=600,
             ban_time=60,
             metrics_port=port,

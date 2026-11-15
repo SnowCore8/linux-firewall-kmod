@@ -623,6 +623,11 @@ def daemon_run_probe(cmd: list[str], timeout: int = 3) -> tuple[int | None, byte
         return None, b""
 
 
+# max_retries 的上限：窗口只保留 detect.MaxTimestampsPerIP(100) 条时间戳，阈值还要叠加
+# 高峰 +2 与内网 +3，超过 95 的阈值永远达不到，daemon 会拒绝启动（config/parser.go）。
+MAX_RETRIES_CEILING = 95
+
+
 def generate_test_yaml(
     file_path: str,
     log_file: str,
