@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml/badge.svg)](https://github.com/SnowCore8/linux-firewall-kmod/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v2.4.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
+[![Release](https://img.shields.io/badge/release-v2.5.0-green.svg)](https://github.com/SnowCore8/linux-firewall-kmod/releases)
 [![Platform](https://img.shields.io/badge/Platform-Linux%205.x%20%7C%206.x%20%7C%207.x-orange.svg)](#内核兼容性)
 
 ## 这是什么
@@ -279,10 +279,6 @@ node --test .github/scripts/*.test.mjs
 
 `qwen-dispatch.yml` 里那一步 `actions/checkout` 显式钉在**默认分支**上取 `.github/scripts/`，所以事件触发的那次运行用的永远是主干上的脚本。**改了脚本要先合进默认分支才会生效。**
 
-## 许可证
-
-MIT License - 详见 [LICENSE](LICENSE) 文件。
-
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
@@ -304,6 +300,7 @@ MIT License - 详见 [LICENSE](LICENSE) 文件。
 
 MIT License，见 [LICENSE](LICENSE)。
 内核模块源码声明为 Dual MIT/GPL。
+第三方组件与许可证见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 ## 联系
 
