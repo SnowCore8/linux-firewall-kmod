@@ -283,6 +283,11 @@ node --test .github/scripts/*.test.mjs
 
 欢迎提交 Issue 和 Pull Request。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+## 治理
+
+维护者与权限见 [MAINTAINERS.md](MAINTAINERS.md)，决策模型与门禁见 [GOVERNANCE.md](GOVERNANCE.md)，
+参与方式见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)，提问与支持渠道见 [SUPPORT.md](SUPPORT.md)。
+
 ## 安全
 
 发现安全漏洞请通过 [SECURITY.md](SECURITY.md) 中说明的方式报告。

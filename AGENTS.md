@@ -224,6 +224,10 @@ make test
 | [docs/zh/configuration/threat-feeds.md](docs/zh/configuration/threat-feeds.md) | 威胁情报源配置指南 |
 | [docs/zh/migration-threat-feeds.md](docs/zh/migration-threat-feeds.md) | 威胁情报源迁移指南 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
+| [GOVERNANCE.md](GOVERNANCE.md) | 决策模型、审批路由与分支门禁 |
+| [MAINTAINERS.md](MAINTAINERS.md) | 维护者、权限与继任 |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | 行为准则与处理方式 |
+| [SUPPORT.md](SUPPORT.md) | 提问与支持渠道 |
 | [SECURITY.md](SECURITY.md) | 安全策略 |
 | [STANDARDS.md](STANDARDS.md) | 定级规范 |
 | [CHANGELOG.md](CHANGELOG.md) | 变更记录 |
