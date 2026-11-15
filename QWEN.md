@@ -61,7 +61,7 @@
 
 合并用 squash，删掉分支，关闭关联的 Issue，把 Issue 里的 checklist 勾完。闸门之外自己 `gh pr merge` 是被拦住的；真绕过去了，job 末尾那道检查会让整轮失败。
 
-判据的完整说明见 [docs/merge-gate.md](docs/merge-gate.md)。
+判据的完整说明见 [docs/zh/development/merge-gate.md](docs/zh/development/merge-gate.md)。
 
 ## 不做的事
 
