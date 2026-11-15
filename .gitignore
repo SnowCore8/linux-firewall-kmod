@@ -95,6 +95,8 @@ debian/*.debhelper.log
 debian/*.debhelper
 
 # ---- AI 工具 ----
+# Qoder 生成的仓库 wiki（repowiki）与元数据，本机可再生成，不入库。
+.qoder/
 # 用 .qwen/* 而不是 .qwen/：排除整个目录之后，下面的 ! 规则一律失效，
 # 写在这里的放行项会静默不生效（.qwen/settings.json 等本机状态仍不入库）。
 .qwen/*
