@@ -5,10 +5,13 @@
 | 文档 | 内容 |
 |------|------|
 | [构建](building.md) | Makefile 目标逐条对齐、依赖版本、面板产物链路、契约门禁 |
+| [构建系统](build-system.md) | 标准化构建流程、依赖检查、多版本内核模块编译 |
 | [测试](testing.md) | 三层测试、CI 六个任务、CI 加载不了模块这条实测结论 |
 | [契约系统](contract.md) | 契约文件、改动流程、HTTP/netlink/procfs 契约详解 |
 | [性能口径与测量方法](perf-baseline.md) | 红线定义、结构口径、`scripts/bench/` 的复现方法与判定纪律 |
 | [内核模块设计](kernel-module-design.md) | 设计决策、冻结面、缺陷处置、验收范围 |
+| [内核 API 兼容性](kernel-api-compatibility.md) | 关键 API 可用性检查策略与加载失败时的报错约定 |
+| [多版本内核模块编译](multi-version-kmod.md) | 多内核版本编译、远程编译与兼容性判定 |
 | [集群扫描检测设计](cluster-detection-design.md) | 判据、实测依据、分层前缀表的取舍 |
 
 架构侧文档在 [docs/zh/architecture/](../architecture/README.md)。
@@ -21,7 +24,7 @@
 | GCC / 内核构建系统 | 与运行内核匹配的 `linux-headers-$(uname -r)` | 根 `Makefile` 的 `KDIR` |
 | Make | 4.0+ | 根 `Makefile` 用到 `$(shell ...)`、模式规则与序化前提 |
 | Go | `src/daemon/go.mod` 声明 `go 1.26.0` | `src/daemon/go.mod` |
-| Node.js + npm | CI 用 `node-version: '22'` | `.github/workflows/ci.yml` |
+| Node.js + npm | CI 用 `node-version: '24'` | `.github/workflows/ci.yml` |
 | clang-format | 以 18 为准 | `.github/workflows/ci.yml`、`CHANGELOG.md` |
 | Python 3 | 契约生成与校验 | 根 `Makefile` 的 `PYTHON ?= python3` |
 | Git | 2.30+ | — |

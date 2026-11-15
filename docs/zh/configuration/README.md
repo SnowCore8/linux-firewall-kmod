@@ -7,6 +7,7 @@
 | [YAML 配置](yaml-config.md) | 守护进程读的那个配置文件：字段、类型、默认值、会被拒的值 |
 | [配置示例](examples.md) | `config/` 目录里现成的几份配置，可以整份抄走 |
 | [ProcFS 接口](procfs.md) | 内核模块暴露在 `/proc/firewall/` 的条目：权限、写法、字段 |
+| [威胁情报源](threat-feeds.md) | IPsum、FireHOL 等情报源的开关、刷新与命中封禁策略 |
 
 ## 两者是什么关系
 
