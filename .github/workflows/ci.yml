@@ -387,7 +387,9 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
 
       - name: 安装 Playwright 依赖
         run: |
@@ -395,6 +397,13 @@ jobs:
           # 只装 chromium：套件只跑 Desktop Chrome 一个 project。
           # --with-deps 会连同系统库一起装齐。
           npx playwright install --with-deps chromium
+
+      # tests/e2e/live-data-freshness.spec.ts 直接 import 前端源码
+      # （hooks/useLiveData.ts 与 lib/freshness.ts），后者 import react；
+      # 不装前端依赖时用例在加载阶段就报 Cannot find package 'react'。
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
 
       - name: 针对本机内核重编内核模块
         run: |
