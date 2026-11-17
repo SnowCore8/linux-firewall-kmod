@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Dual MIT/GPL */
+/* SPDX-License-Identifier: MIT OR GPL-2.0-only */
 /*
  * fw_ban.h - 封禁表（按 prefix_len 分层的桶表 + RCU + 层内桶锁，per-entry 定时器）
  *

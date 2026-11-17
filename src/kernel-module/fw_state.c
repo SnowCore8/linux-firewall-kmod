@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Dual MIT/GPL
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 /*
  * fw_state.c - 状态文件读写（封禁表 + 白名单）
  *

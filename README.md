@@ -296,7 +296,7 @@ node --test .github/scripts/*.test.mjs
 
 | 依赖 | 版本 |
 |------|------|
-| Go | 1.26.0 |
+| Go | 1.26.0（go.mod 下限；CI 用 1.27.4） |
 | Node.js | 24 |
 | 内核头文件 | 与运行内核一致 |
 | clang-format | 18 |
@@ -304,7 +304,8 @@ node --test .github/scripts/*.test.mjs
 ## 许可证
 
 MIT License，见 [LICENSE](LICENSE)。
-内核模块源码声明为 Dual MIT/GPL。
+内核模块源码为双许可，任选其一：MIT 或 GPL-2.0-only（SPDX 表达式 `MIT OR GPL-2.0-only`，
+GPL 全文见 [LICENSE.GPL-2.0](LICENSE.GPL-2.0)）。
 第三方组件与许可证见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)。
 
 ## 联系

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Dual MIT/GPL */
+/* SPDX-License-Identifier: MIT OR GPL-2.0-only */
 /*
  * fw_local.h - 本机接口精确地址集合（开放寻址哈希集）
  *

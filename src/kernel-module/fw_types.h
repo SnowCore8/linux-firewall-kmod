@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Dual MIT/GPL */
+/* SPDX-License-Identifier: MIT OR GPL-2.0-only */
 /*
  * fw_types.h - 内核防火墙模块的内部类型与常量（无数据所有权）
  *

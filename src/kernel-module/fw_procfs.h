@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Dual MIT/GPL */
+/* SPDX-License-Identifier: MIT OR GPL-2.0-only */
 /*
  * fw_procfs.h - 13 个 /proc/firewall 条目（fw_procfs.c 的窄接口）
  *

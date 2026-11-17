@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Dual MIT/GPL */
+/* SPDX-License-Identifier: MIT OR GPL-2.0-only */
 /*
  * fw_rate.h - 速率表、窗口滚动、EWMA、违规判定
  *

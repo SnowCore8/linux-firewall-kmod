@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Dual MIT/GPL
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 /*
  * fw_procfs.c - /proc/firewall 的全部条目
  *

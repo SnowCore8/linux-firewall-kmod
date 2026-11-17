@@ -1,6 +1,15 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: linux-firewall-kmod
 
+Files: src/kernel-module/*
+Copyright: 2026 SnowCore8 <snowcore8@gmail.com>
+License: MIT or GPL-2.0
+ 内核模块源码按 SPDX 表达式 "MIT OR GPL-2.0-only" 双许可，接收方可任选其一。
+ .
+ 选择 MIT 时适用本文件上方 "License: MIT" 段落的全文。
+ 选择 GPL-2.0 时适用 /usr/share/common-licenses/GPL-2（Debian 系统通用许可证文本），
+ 该文本与本仓库 LICENSE.GPL-2.0 一致。
+
 Files: *
 Copyright: 2026 SnowCore8 <snowcore8@gmail.com>
 License: MIT

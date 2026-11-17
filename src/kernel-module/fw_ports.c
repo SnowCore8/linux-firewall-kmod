@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Dual MIT/GPL
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 /*
  * fw_ports.c - 受保护端口位图的存储与查找
  *

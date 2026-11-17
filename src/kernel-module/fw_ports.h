@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Dual MIT/GPL */
+/* SPDX-License-Identifier: MIT OR GPL-2.0-only */
 /*
  * fw_ports.h - 受保护端口位图（对外监听端口 → 参与 DDoS 速率判定）
  *

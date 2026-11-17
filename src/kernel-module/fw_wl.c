@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Dual MIT/GPL
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 /*
  * fw_wl.c - 白名单（64 精确桶 + 子网链表）
  *

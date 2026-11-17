@@ -34,7 +34,7 @@
 
 ## 内核模块
 
-`src/kernel-module/` 全部为本项目自研 C 代码，不含第三方源码；它只调用 Linux 内核导出的 API。各文件的许可证声明见文件头 SPDX 标识与仓库根 `LICENSE`。
+`src/kernel-module/` 全部为本项目自研 C 代码，不含第三方源码；它只调用 Linux 内核导出的 API。各文件的许可证声明见文件头 SPDX 标识（`MIT OR GPL-2.0-only`）与仓库根的 `LICENSE`、`LICENSE.GPL-2.0`。
 
 ## 许可证全文
 

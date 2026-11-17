@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Dual MIT/GPL
+// SPDX-License-Identifier: MIT OR GPL-2.0-only
 /*
  * fw_main.c - 模块生命周期、模块参数与 fw_info 单例
  *

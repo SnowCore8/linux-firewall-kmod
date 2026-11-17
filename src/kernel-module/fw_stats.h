@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Dual MIT/GPL */
+/* SPDX-License-Identifier: MIT OR GPL-2.0-only */
 /*
  * fw_stats.h - per-CPU 统计与分析分布（fw_stats.c 的窄接口）
  *
