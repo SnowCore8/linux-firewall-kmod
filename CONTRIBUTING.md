@@ -223,7 +223,7 @@ HTTP 未接线条目基线在 `contract/http_gap_baseline.txt`，只减不增。
 ```bash
 git checkout master
 git pull
-git checkout -b feature/short-name
+git checkout -b fix/short-name
 
 # 开发，跑门禁
 git add <文件>
@@ -233,7 +233,11 @@ git push origin feature/short-name
 
 在 GitHub 上向 `master` 发 Pull Request。
 模板见 [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md)。
-维护者会在 48 小时内响应。合并后功能分支可删。
+维护者尽力在 48 小时内响应（单人维护，尽力而为，不构成 SLA）。
+
+合并方式只有 squash：PR 标题就是最终的提交标题，正文保留描述要点；合并后远端主题分支自动删除。
+本仓库只有一名维护者，GitHub 不允许自我批准，因此批准数为 0，替代控制是 PR 模板里的「自审」一节。
+分支模型与门禁细节见 [GOVERNANCE.md](GOVERNANCE.md)。
 
 ### PR 检查清单
 
