@@ -228,15 +228,21 @@ def unban_multiple(*ips: str):
 
 
 def ip_is_banned(ip: str) -> bool:
-    """检查 IP 是否在封禁列表中"""
+    """检查 IP 是否在封禁列表中。
+
+    bans 每行形如 "<ip>  (expires in N seconds)" 或 "<ip>  (permanent)"，
+    网段条目是 "<cidr>/<前缀>"。整行比较会把所有条目都判成不存在，故按第一列比对；
+    网段条目不算精确命中。
+    """
     try:
         content = PROC_BANS.read_text()
-        for line in content.strip().splitlines():
-            if line.strip() == ip:
-                return True
-        return False
     except (FileNotFoundError, PermissionError):
         return False
+    for line in content.splitlines():
+        fields = line.split()
+        if fields and fields[0] == ip:
+            return True
+    return False
 
 
 def whitelist_add(subnet: str):
