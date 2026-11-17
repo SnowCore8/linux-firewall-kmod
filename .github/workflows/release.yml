@@ -7,10 +7,38 @@ on:
 
 permissions:
   contents: write
+  checks: read
 
 jobs:
+  # 发布前先证明被 tag 的那次提交确实过了必需检查。tag 可以由管理员直接推，
+  # 但发布物不能因此绕过门禁。
+  verify:
+    name: 校验必需检查
+    runs-on: ubuntu-26.04
+    steps:
+      - name: 必需检查必须全部成功
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          runs="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?per_page=100")"
+          fail=0
+          for name in 代码质量检查 前端构建 编译 运行测试 浏览器端到端测试; do
+            conclusion="$(printf '%s' "$runs" | jq -r --arg n "$name"               '[.check_runs[] | select(.name == $n)] | sort_by(.started_at) | last | .conclusion // "missing"')"
+            if [[ "$conclusion" != "success" ]]; then
+              echo "::error::必需检查「$name」在 ${GITHUB_SHA} 上的最新结果是 $conclusion"
+              fail=1
+            fi
+          done
+          if [[ "$fail" -ne 0 ]]; then
+            echo "::error::被 tag 的提交没有通过全部门禁，拒绝发布"
+            exit 1
+          fi
+          echo "✓ 五项必需检查均为 success"
+
   build-and-release:
     name: 构建并发布
+    needs: [verify]
     runs-on: ubuntu-26.04
 
     steps:
@@ -36,10 +64,30 @@ jobs:
           chmod +x build-deb.sh
           ./build-deb.sh "$VERSION"
 
+      - name: 汇总发布资产
+        run: |
+          set -euo pipefail
+          cp LICENSE LICENSE.GPL-2.0 THIRD-PARTY-NOTICES.md build/deb/
+          (cd build/deb && sha256sum linux-firewall-kmod-*.deb > SHA256SUMS)
+
+      - name: 生成 SBOM（SPDX JSON）
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: build/deb
+          format: spdx-json
+          output-file: build/deb/sbom.spdx.json
+          upload-artifact: false
+
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: build/deb/linux-firewall-kmod-*.deb
+          files: |
+            build/deb/linux-firewall-kmod-*.deb
+            build/deb/SHA256SUMS
+            build/deb/sbom.spdx.json
+            build/deb/LICENSE
+            build/deb/LICENSE.GPL-2.0
+            build/deb/THIRD-PARTY-NOTICES.md
           generate_release_notes: true
           draft: false
           prerelease: false
