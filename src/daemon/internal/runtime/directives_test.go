@@ -181,9 +181,10 @@ func TestRejectedDispatchIsSuppressedThenResumes(t *testing.T) {
 
 	sink := newAcceptingSink()
 	ex, cmd := directiveFixture(t, log, "reject-test", sink)
-	// 抑制窗口缩到可测的长度（默认 60 秒，测试里等不起），但仍要明显长于下面「5 轮循环」
-	// 的挂钟耗时——否则负载高时循环跨过窗口边界，抑制断言会随机失败。
-	ex.rejectionTTL = 200 * time.Millisecond
+	// 抑制窗口不需要等它自然到期：用例只验证「窗口内不下发、窗口后可恢复」。
+	// 窗口设长一点，避免 CI 负载下 5 轮循环跨过边界（200ms 曾实测随机失败）；
+	// 恢复阶段直接把已记录的到期点改到过去，不依赖挂钟等待。
+	ex.rejectionTTL = 5 * time.Second
 
 	probe := failedLine("203.0.113.55") + "\n"
 	appendFile(t, log, []byte(probe+probe+probe))
@@ -205,13 +206,11 @@ func TestRejectedDispatchIsSuppressedThenResumes(t *testing.T) {
 		t.Fatalf("抑制窗口内仍在重复下发：sends %d → %d", first, got)
 	}
 
-	// 窗口过后恢复下发能力。
-	//
-	// 追加一小批而不是一条：有效阈值 = ceil(max_retries × 高峰系数 × 内网系数 × 信誉系数)，
-	// 高峰期（UTC 9–18 点）的 1.5 系数会把 max_retries=1 抬到 2。只补一条的话，恰在高峰
-	// 时段跑测试就会因「单次失败未达阈值」而不下发——断言会随挂钟时刻变红变绿。补一小批
-	// 则任何系数下都能越过阈值，断言与时钟无关。
-	time.Sleep(300 * time.Millisecond)
+	// 窗口过后恢复下发能力。把到期点改到过去来模拟窗口结束，而不是 sleep 等它过期：
+	// 真实时钟会让断言依赖 CI 负载。追加一小批而不是一条：有效阈值 =
+	// ceil(max_retries × 高峰系数 × 内网系数 × 信誉系数)，高峰期 1.5 系数会把
+	// max_retries=1 抬到 2；补一批则任何系数下都能越过阈值。
+	ex.rejected["203.0.113.55"] = time.Now().Add(-time.Second)
 	appendFile(t, log, []byte(probe+probe+probe))
 	driveUntil(t, ex, func() bool { return sink.sendCount() > first })
 	if got := sink.sendCount(); got <= first {
