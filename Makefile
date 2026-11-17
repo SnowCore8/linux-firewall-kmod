@@ -401,7 +401,7 @@ ci-format:
 	@# YAML 配置检查
 	@if command -v yamllint >/dev/null 2>&1; then \
 		echo "检查 YAML 配置..."; \
-		yamllint config/ 2>&1 || { \
+		yamllint -c .yamllint config/ 2>&1 || { \
 			echo "❌ YAML 格式检查失败"; \
 			exit 1; \
 		}; \
@@ -564,7 +564,7 @@ format-check:
 		echo "✓ Kernel module formatting check passed"; \
 		if command -v yamllint >/dev/null 2>&1; then \
 			echo "Checking YAML configuration..."; \
-			yamllint config/ || exit 1; \
+			yamllint -c .yamllint config/ || exit 1; \
 		else \
 			echo "yamllint not found, skipping YAML check"; \
 		fi; \

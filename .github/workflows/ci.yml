@@ -38,14 +38,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang-format shellcheck
-          pip install yamllint
+          pip install yamllint==1.37.1
           # Go 守护进程（src/daemon，Go module）的格式 / vet 工具
           go version
 
       - name: 配置 Go 版本
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26'
+          go-version: '1.27.4'
           cache: true
           cache-dependency-path: src/daemon/go.sum
 
@@ -74,13 +74,24 @@ jobs:
           cd src/daemon && go test ./...
           echo "✓ 单元测试通过"
 
-      - name: 运行覆盖率测试
+      - name: 依赖漏洞扫描（govulncheck）
         run: |
-          echo "=== 生成覆盖率报告 ==="
-          cd src/daemon && go test -coverprofile=coverage.out -covermode=atomic ./...
-          go tool cover -func=coverage.out | tail -1
-          echo "✓ 覆盖率报告已生成"
-        continue-on-error: true
+          # 固定工具版本；扫描符号级可达的漏洞，标准库与直接/间接依赖都算。
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          cd src/daemon && govulncheck ./...
+
+      - name: 覆盖率门禁（下限 70%）
+        run: |
+          # 2026-11 实测总覆盖率 75.1%，下限取 70% 留出回归余量。
+          # 阈值下调必须在 PR 里写明理由，不得与导致覆盖率下降的改动同一提交。
+          cd src/daemon
+          go test -coverprofile=coverage.out -covermode=atomic ./...
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
+          echo "总覆盖率: ${total}%（下限 70%）"
+          awk -v t="$total" 'BEGIN { exit !(t + 0 >= 70) }' || {
+            echo "::error::覆盖率 ${total}% 低于下限 70%"
+            exit 1
+          }
 
       - name: 上传覆盖率报告
         uses: actions/upload-artifact@v6
@@ -91,7 +102,7 @@ jobs:
         continue-on-error: true
 
       - name: 检查 YAML 配置（yamllint）
-        run: yamllint -c .yamllint config/*.yaml
+        run: yamllint -c .yamllint config/
 
       - name: 校验契约生成物与生成器一致
         run: make contract-drift
@@ -175,6 +186,13 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v5
+
+      - name: 配置 Go 版本
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.4'
+          cache: true
+          cache-dependency-path: src/daemon/go.sum
 
       - name: 安装编译依赖
         run: |
@@ -506,9 +524,9 @@ jobs:
           # "No module named pytest" 退出 1；下面的 pytest 是 `sudo python3 -m pytest`
           # 起的（内核测试要 root 权限），所以必须装进系统站点目录，
           # --user 安装对 root 不可见。
-          sudo apt-get install -y python3-pytest python3-yaml
-          # 安装测试报告生成依赖（pytest-html 生成 HTML 报告）
-          sudo pip3 install pytest-html --break-system-packages
+          # 测试依赖固定在 tests/requirements.txt，避免 apt 包随镜像漂移；
+          # 下面的 pytest 是 `sudo python3 -m pytest` 起的，所以要装进系统站点目录。
+          sudo pip3 install -r tests/requirements.txt --break-system-packages
           python3 -m pytest --version
           python3 -c "import yaml; print('PyYAML', yaml.__version__)"
 
