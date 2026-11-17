@@ -341,6 +341,6 @@ cd src/daemon && GOOS=linux GOARCH=arm64 \
 
 ## 相关文档
 
-- [测试](testing.md)：三层测试与 CI 六个任务
+- [测试](testing.md)：三层测试与 CI 五个任务
 - [内核模块](../architecture/kernel-module.md)：源码文件清单与内核适配
 - [Web 前端](../architecture/frontend.md)：Vite 配置与嵌入目录约束

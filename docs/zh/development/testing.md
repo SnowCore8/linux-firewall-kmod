@@ -141,20 +141,19 @@ sudo bash scripts/e2e-daemon.sh stop      # 停进程并 rmmod，释放内核 po
 局域网一侧的对照由 `E2E_LAN_ORIGIN=http://<局域网IP>:<port>` 开启；
 不设置则该侧显式跳过（CI 即如此）。
 
-## CI 的六个任务
+## GitHub Actions 的五个任务
 
 任务名取自 `.github/workflows/ci.yml` 的 `name:` 字段。
 
 | 任务名 | job id | 做什么 |
 |--------|--------|--------|
-| 代码质量检查 | `lint` | `clang-format --dry-run --Werror`、`gofmt -l`、`go vet`、`go test ./cmd/... ./internal/...`、`yamllint config/` |
-| 契约一致性 | `contract` | `make contract-drift` + `verify_layout` / `verify_procfs` / `verify_http` |
+| 代码质量检查 | `lint` | `clang-format --dry-run --Werror`、`gofmt -l`、`go vet`、`go test ./...`、`yamllint -c .yamllint config/`、`make contract-drift`、`verify_layout` / `verify_procfs` / `verify_http` |
 | 前端构建 | `frontend` | `npm ci`、`tsc --noEmit`、`vite build`、产物与 PWA 清单校验、`node --check sw.js` |
 | 编译 | `build` | 编内核模块与守护进程，上传产物 |
 | 浏览器端到端测试 | `e2e` | `scripts/e2e-daemon.sh` 起真守护进程后跑 Playwright |
-| 运行测试 | `test` | 装 `sqlite3`、`python3-pytest`、`python3-yaml`，跑 pytest |
+| 运行测试 | `test` | 装 `sqlite3`，按 `tests/requirements.txt` 装固定版本的 pytest / PyYAML / pytest-html，跑 pytest |
 
-六项全过才允许合入。
+五项全过才允许合入。`make ci` 是另一条本地六阶段流水线，不是这五个 job 的副本，两者的差异见 [CI 流程](ci-workflow.md)。
 
 ### 必须知道的实测结论
 
