@@ -4,6 +4,9 @@ Priority: optional
 Maintainer: SnowCore8 <snowcore8@gmail.com>
 Build-Depends: debhelper-compat (= 13), build-essential, python3, nodejs, npm
 Standards-Version: 4.5.1
+Homepage: https://github.com/SnowCore8/linux-firewall-kmod
+Vcs-Git: https://github.com/SnowCore8/linux-firewall-kmod.git
+Vcs-Browser: https://github.com/SnowCore8/linux-firewall-kmod
 Rules-Requires-Root: no
 
 Package: linux-firewall-kmod
