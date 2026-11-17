@@ -64,13 +64,13 @@ test.describe('全量 hash 路由', () => {
   })
 
   test('同一会话内连续切换路由不重建外壳', async ({ app }) => {
-    // 先建立会话：令牌由 seedToken 预置进 sessionStorage，URL 里不应残留 access_token
+    // 先建立会话：令牌由 seedToken 预置进 localStorage，URL 里不应残留 access_token
     await openRoute(app, '/dashboard')
     await expect(app, 'URL 不应残留 access_token').not.toHaveURL(/access_token/)
-    const seeded = await app.evaluate((key) => window.sessionStorage.getItem(key), ACCESS_TOKEN_KEY)
-    expect(seeded, 'sessionStorage 应持有访问令牌').toBeTruthy()
+    const seeded = await app.evaluate((key) => window.localStorage.getItem(key), ACCESS_TOKEN_KEY)
+    expect(seeded, 'localStorage 应持有访问令牌').toBeTruthy()
 
-    // 之后逐页切换：仅改 hash → 同文档导航，令牌改由 sessionStorage 提供，
+    // 之后逐页切换：仅改 hash → 同文档导航，令牌改由 localStorage 提供，
     // 任一页 401 都会表现为弹回登录页，故这里同时锁住「续访后令牌仍然有效」
     for (const route of ROUTE_CASES.slice(1)) {
       await gotoHash(app, route.hash)

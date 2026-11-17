@@ -35,7 +35,7 @@ const TEST_REASON = 'e2e 自动化回归'
 /** 封禁时长（秒） */
 const TEST_DURATION = 300
 
-/** 带 Basic 凭据的请求头：`request` 夹具不共享页面的 sessionStorage，需显式携带 */
+/** 带 Basic 凭据的请求头：`request` 夹具不共享页面的浏览器存储，需显式携带 */
 const AUTH_HEADERS = { Authorization: `Basic ${ACCESS_TOKEN}` }
 
 /** 从分页信封里取出封禁条目（`GET /api/v2/bans` 恒为 { code, data: { items } }） */

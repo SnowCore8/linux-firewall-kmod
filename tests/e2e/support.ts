@@ -8,14 +8,12 @@
  * 凭据一起拒绝），所以用例**绝不能**先裸访问再补凭据。
  *
  * 采用的注入方式：在页面脚本执行前用 `addInitScript` 把令牌写进
- * `sessionStorage['firewall.access_token']`。AuthProvider 挂载时同步读
- * `hasAccessToken()`（见 frontend/src/providers/AuthProvider.tsx 的 useState 初值），
- * 读到即判为已认证、放行受保护路由，后续 fetch 与 EventSource 都自动携带该令牌。
+ * `localStorage['firewall.access_token']`。AuthProvider 挂载时读
+ * `getAccessToken()`（见 frontend/src/api/auth.ts 与 AuthProvider.tsx），读到后先做一次
+ * 真实探测，通过即放行受保护路由，后续 fetch 与 EventSource 都自动携带该令牌。
  *
- * 为什么不再走 `?access_token=` 直达：旧前端有 `auth.ts::initAccessToken` 在启动时把
- * URL 里的令牌搬进 sessionStorage，本次全新重写**没有保留**这条引导路径（已在
- * docs/zh/architecture/frontend.md 记为行为回退）。因此夹具改为直接预置 sessionStorage，
- * 而不是依赖一个产品已不再提供的能力去「顺便验证书签直达」。
+ * 为什么用 localStorage 而不是 sessionStorage：产品把令牌存在 localStorage（跨标签页
+ * 共享登录态），夹具必须与产品读取的位置一致，否则页面会停在登录页。
  */
 
 import { expect, test as base } from '@playwright/test'
@@ -42,7 +40,7 @@ export function encodeCredentials(user: string, password: string): string {
 /** 已编码的访问令牌 */
 export const ACCESS_TOKEN = encodeCredentials(CREDENTIALS.user, CREDENTIALS.password)
 
-/** 令牌在 sessionStorage 里的键（与 api/auth.ts::ACCESS_TOKEN_KEY 一致） */
+/** 令牌在 localStorage 里的键（与 api/auth.ts::ACCESS_TOKEN_KEY 一致） */
 export const ACCESS_TOKEN_KEY = 'firewall.access_token'
 
 /**
@@ -134,17 +132,17 @@ function isIgnorable(issue: ConsoleIssue, origin: string): boolean {
 }
 
 /**
- * 附加到 context 的鉴权初始化：在页面脚本执行前把令牌预置进 sessionStorage。
+ * 附加到 context 的鉴权初始化：在页面脚本执行前把令牌预置进 localStorage。
  *
  * addInitScript 对每次导航、每个同源文档都在页面脚本之前运行，因此首屏 React 挂载时
- * AuthProvider 就能读到令牌。about:blank 等无源文档写 sessionStorage 会抛 SecurityError，
+ * AuthProvider 就能读到令牌。about:blank 等无源文档写 localStorage 会抛 SecurityError，
  * 忽略即可——真正的首次导航是同源 URL，那时写入必然成功。
  */
 async function seedToken(page: Page, token: string): Promise<void> {
   await page.addInitScript(
     ([key, value]: [string, string]) => {
       try {
-        window.sessionStorage.setItem(key, value)
+        window.localStorage.setItem(key, value)
       } catch {
         // 无源文档（about:blank）会抛 SecurityError：忽略，同源导航时会再次运行
       }

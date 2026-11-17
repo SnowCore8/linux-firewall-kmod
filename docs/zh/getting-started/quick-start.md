@@ -72,7 +72,7 @@ http://127.0.0.1:9119/dashboard
 
 配了 `metrics_username` 和 `metrics_password` 时，页面显示登录表单。
 填配置文件里的那两个值。
-令牌存在浏览器 `sessionStorage`，键名 `firewall.access_token`，关掉标签页就没了。
+令牌存在浏览器 `localStorage`，键名 `firewall.access_token`，刷新与跨标签页沿用，退出登录时清除。
 
 前端不消费 URL 里的 `access_token`，没有免登录深链；登录只能走表单。
 `?access_token=<base64(用户名:密码)>` 是服务端接受的 query 凭据通道，

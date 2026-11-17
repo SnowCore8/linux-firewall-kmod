@@ -310,13 +310,13 @@ ThemeProvider（AntD ConfigProvider：主题 token / 暗色算法 / 中文 local
 |------|------|------|
 | `Authorization: Basic <base64(user:pass)>` | REST 读写 | 服务侧中间件的首选来源 |
 | `?access_token=<base64>` | `EventSource` | 浏览器不给 `EventSource` 设自定义请求头 |
-| `sessionStorage`，键 `firewall.access_token` | 刷新后沿用 | 同源隔离，关闭标签页即失效 |
+| `localStorage`，键 `firewall.access_token` | 刷新与跨标签页沿用 | 同源隔离；登录态跨标签共享，退出登录时清除 |
 
 ### 令牌从哪来
 
 令牌只在**交互式登录**时产生：登录页（`views/Login.tsx`）收集用户名/密码 →
 `api/auth.ts` 的 `encodeBasic` 编成 `base64(user:pass)` → 一次真实探测通过后
-`setAccessToken` 写进 `sessionStorage`。此后：
+`setAccessToken` 写进 `localStorage`。此后：
 
 - REST 侧由 `client.ts` 经 `authorizationHeader()` 注入 `Authorization: Basic <token>`；
 - SSE 侧由 `endpoints.ts` 的 `eventsStreamUrl()`/`logsStreamUrl()` 从 `getAccessToken()`
