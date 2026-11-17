@@ -519,16 +519,14 @@ jobs:
           # 测试套件强制要求 sqlite3 CLI（禁止跳过）
           sudo apt-get install -y sqlite3
           sqlite3 --version
-          # 测试套件本身的两处第三方依赖：pytest 与 tests/config.py 读 YAML 用的 PyYAML。
-          # runner 镜像里的系统 python3 不带这两个模块，缺任一个都会在收集阶段就
-          # "No module named pytest" 退出 1；下面的 pytest 是 `sudo python3 -m pytest`
-          # 起的（内核测试要 root 权限），所以必须装进系统站点目录，
-          # --user 安装对 root 不可见。
-          # 测试依赖固定在 tests/requirements.txt，避免 apt 包随镜像漂移；
-          # 下面的 pytest 是 `sudo python3 -m pytest` 起的，所以要装进系统站点目录。
-          sudo pip3 install -r tests/requirements.txt --break-system-packages
-          python3 -m pytest --version
-          python3 -c "import yaml; print('PyYAML', yaml.__version__)"
+          # 测试依赖固定在 tests/requirements.txt。装进独立 venv 而不是系统站点目录：
+          # runner 的 PyYAML 由 apt 安装、没有 pip 的 RECORD 文件，pip 升级时会
+          # 报 uninstall-no-record-file 并直接失败（实测 run 44145632244）。
+          sudo apt-get install -y python3-venv
+          sudo python3 -m venv /opt/firewall-test-venv
+          sudo /opt/firewall-test-venv/bin/pip install --quiet -r tests/requirements.txt
+          sudo /opt/firewall-test-venv/bin/python -m pytest --version
+          sudo /opt/firewall-test-venv/bin/python -c "import yaml; print('PyYAML', yaml.__version__)"
 
       - name: 针对本机内核重编内核模块
         run: |
@@ -566,14 +564,14 @@ jobs:
           echo "=== 执行测试 ==="
           if [[ "${{ steps.check-module.outputs.compatible }}" == "true" ]]; then
             echo "运行环境：完整测试（模块可加载）"
-            sudo python3 -m pytest tests/ -v --tb=short \
+            sudo /opt/firewall-test-venv/bin/python -m pytest tests/ -v --tb=short \
               --junitxml=junit.xml \
               --html=report.html --self-contained-html
           else
             echo "运行环境：守护进程功能测试（模块不兼容）"
             echo "注：内核模块测试套件（01-04/07/08/11/12/14）需要模块可加载"
             echo "仅运行守护进程相关测试（09/10/13/15-21）"
-            sudo python3 -m pytest tests/ -v --tb=short \
+            sudo /opt/firewall-test-venv/bin/python -m pytest tests/ -v --tb=short \
               --junitxml=junit.xml \
               --html=report.html --self-contained-html \
               -k "daemon or logparse or frp or ddos or webui or config_reload or log_rotation or netlink or lifecycle or multi_jail or cluster_scan or auth_lockout or concurrent_reload_bans"
