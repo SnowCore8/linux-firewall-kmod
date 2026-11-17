@@ -16,16 +16,6 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v5
 
-      - name: 配置 Go 模块缓存
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('src/daemon/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
-
       - name: 配置 pip 缓存
         uses: actions/cache@v5
         with:
@@ -213,16 +203,6 @@ jobs:
           key: ${{ runner.os }}-ccache-${{ hashFiles('src/kernel-module/*.c', 'src/kernel-module/*.h') }}
           restore-keys: |
             ${{ runner.os }}-ccache-
-
-      - name: 配置 Go 模块缓存
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: ${{ runner.os }}-go-build-${{ hashFiles('src/daemon/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-build-
 
       - name: 预热 cache 统计
         run: |
