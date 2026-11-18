@@ -186,8 +186,9 @@ struct fw_stats_response {
     __u64 whitelist_count;
     __u64 packets_dropped;
     __u64 packets_accepted;
+    __u32 ban_capacity;
 } __packed;
-_Static_assert(sizeof(struct fw_stats_response) == 60, "stats_response 布局必须为 60 字节");
+_Static_assert(sizeof(struct fw_stats_response) == 64, "stats_response 布局必须为 64 字节");
 
 struct fw_whitelist_entry {
     __u8 af;

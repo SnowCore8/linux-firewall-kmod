@@ -375,7 +375,7 @@ func (h *APIHandlers) buildThreatLevel(snap telemetry.Snapshot, now time.Time, r
 	currentPps := uint64(math.Round(pps.Short))
 
 	usage := 0.0
-	if capacity := h.banTableCapacity(); capacity > 0 {
+	if capacity := h.banTableCapacity(snap); capacity > 0 {
 		usage = float64(snap.Stats.CurrentBans) / float64(capacity)
 		if usage > 1 {
 			usage = 1
@@ -517,10 +517,14 @@ func (h *APIHandlers) uptimeSeconds(now time.Time) uint64 {
 
 // banTableCapacity 是封禁表占用率的分母。
 //
-// 内核没有把实时上限带进 netlink 统计响应，占用率因此按**守护进程配置的条目上限**算
-// （config.Capacity.MaxBanEntries，与下发给模块的 fw_max_ban_entries 同一个值）。配置
-// 缺席或上限为 0 时占用率报 0，不做除零保护以外的猜测。
-func (h *APIHandlers) banTableCapacity() uint64 {
+// 优先取内核统计响应里的真实容量（StatsResponse.ban_capacity，即内核实际执行容量检查的
+// fw_info.max_ban_entries）：它由加载时的模块参数决定，守护进程配置值不保证与之一致。
+// 内核未提供读数（0）时回退到守护进程配置的条目上限（config.Capacity.MaxBanEntries）；
+// 两者都缺席或为 0 时占用率报 0，不做除零保护以外的猜测。
+func (h *APIHandlers) banTableCapacity(snap telemetry.Snapshot) uint64 {
+	if capacity := snap.Stats.BanCapacity; capacity > 0 {
+		return uint64(capacity)
+	}
 	cfg := h.currentConfig()
 	if cfg == nil {
 		return 0

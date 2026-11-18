@@ -344,6 +344,7 @@ func TestRoundTripStatsResponse(t *testing.T) {
 	in := StatsResponse{
 		CurrentBans: 5, TotalBans: 100, TotalUnbans: 95,
 		WhitelistCount: 4, PacketsDropped: 1 << 45, PacketsAccepted: 1<<45 + 1,
+		BanCapacity: 65535,
 	}
 	b, err := in.Encode(51)
 	if err != nil {
@@ -356,6 +357,30 @@ func TestRoundTripStatsResponse(t *testing.T) {
 	}
 	if out != in {
 		t.Fatalf("往返不一致: 得到 %+v，期望 %+v", out, in)
+	}
+}
+
+// TestRoundTripStatsBanCapacity 核对内核容量字段的偏移、大端编码与满载往返：
+// 它是占用率的分母，编码端与解码端对不上会让读数静默偏向配置值。
+func TestRoundTripStatsBanCapacity(t *testing.T) {
+	const off = 60
+	for _, capacity := range []uint32{1, 65535, ^uint32(0)} {
+		in := StatsResponse{CurrentBans: 3, BanCapacity: capacity}
+		b, err := in.Encode(9)
+		if err != nil {
+			t.Fatalf("编码失败: %v", err)
+		}
+		mustLen(t, "StatsResponse", b)
+		if got := getU32(b, off); got != capacity {
+			t.Fatalf("ban_capacity 线上值 %d，期望 %d（偏移 %d）", got, capacity, off)
+		}
+		var out StatsResponse
+		if err := out.Decode(b); err != nil {
+			t.Fatalf("解码失败: %v", err)
+		}
+		if out.BanCapacity != capacity {
+			t.Fatalf("ban_capacity 往返为 %d，期望 %d", out.BanCapacity, capacity)
+		}
 	}
 }
 

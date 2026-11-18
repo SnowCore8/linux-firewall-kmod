@@ -459,6 +459,7 @@ func (m *ListBansResponse) Encode(seq uint32) ([]byte, error) {
 var offStatsResponse = map[string]int{
 	"current_bans": 12, "total_bans": 20, "total_unbans": 28,
 	"whitelist_count": 36, "packets_dropped": 44, "packets_accepted": 52,
+	"ban_capacity": 60,
 }
 
 // StatsResponse 统计响应（定长）。
@@ -469,6 +470,9 @@ type StatsResponse struct {
 	WhitelistCount  uint64
 	PacketsDropped  uint64
 	PacketsAccepted uint64
+	// BanCapacity 是内核实际执行容量检查的封禁条目上限（fw_info.max_ban_entries）；
+	// 0 表示内核未提供读数，占用率分母回退到配置。
+	BanCapacity uint32
 }
 
 // Decode 解析 StatsResponse 报文。
@@ -491,6 +495,7 @@ func (m *StatsResponse) Decode(b []byte) error {
 	m.WhitelistCount = getU64(b, o["whitelist_count"])
 	m.PacketsDropped = getU64(b, o["packets_dropped"])
 	m.PacketsAccepted = getU64(b, o["packets_accepted"])
+	m.BanCapacity = getU32(b, o["ban_capacity"])
 	return nil
 }
 
@@ -504,6 +509,7 @@ func (m *StatsResponse) Encode(seq uint32) ([]byte, error) {
 	putU64(b, o["whitelist_count"], m.WhitelistCount)
 	putU64(b, o["packets_dropped"], m.PacketsDropped)
 	putU64(b, o["packets_accepted"], m.PacketsAccepted)
+	putU32(b, o["ban_capacity"], m.BanCapacity)
 	encodeHeader(b, MsgStatsResponse, seq)
 	return b, nil
 }

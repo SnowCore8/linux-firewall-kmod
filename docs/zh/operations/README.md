@@ -45,8 +45,9 @@
 | `firewall_netlink_send_errors_total` | `/metrics` | 与内核的链路有问题 |
 | `firewall_kernel_commands_rejected_total` | `/metrics` | 内核在拒绝下发的指令 |
 
-条目上限由**内核模块参数**决定，不由守护进程配置决定。
-`capacity:` 段只做持久化与展示，见
+条目上限由**内核模块参数**决定，不由守护进程配置决定；封禁表占用率的分母取自内核
+统计响应的 `ban_capacity`。`capacity:` 段不经 `SetConfig` 下发，`max_ban_entries`
+只在内核没有该读数时回退充当分母，见
 [用户态守护进程](../architecture/daemon.md)「配置与热重载」。
 
 ## 健康检查脚本

@@ -288,7 +288,7 @@ var wireLayouts = map[string]wireLayout{
 	"ConfigChange":          {116, offConfigChange},
 	"BanEntry":              {95, offBanEntry},
 	"ListBansResponse":      {24, offListBansResponse},
-	"StatsResponse":         {60, offStatsResponse},
+	"StatsResponse":         {64, offStatsResponse},
 	"WhitelistEntry":        {34, offWhitelistEntry},
 	"ListWhitelistResponse": {24, offListWhitelistResponse},
 	"RateEntry":             {88, offRateEntry},

@@ -86,8 +86,9 @@ graph TB
 | 事件泵采样 / 对账 / 续约 | 5 秒 / 30 秒 / 10 秒 | `internal/kernel/consumer.go` |
 
 以上 `fw_max_*` 都是**内核模块参数**，只在加载模块或写 sysfs 时生效。
-守护进程配置里的 `capacity:` 段只做持久化与展示，不经 netlink 下发：
-`SetConfig` 消息没有容量字段（`contract/netlink.fwidl`）。
+守护进程配置里的 `capacity:` 段不经 netlink 下发：`SetConfig` 消息没有容量字段
+（`contract/netlink.fwidl`）。封禁表占用率的分母取自内核统计响应的
+`ban_capacity`，配置里的 `max_ban_entries` 只在内核没有该读数时充当回退值。
 
 ## 并发模型
 

@@ -170,6 +170,7 @@ export interface StatsResponse {
   whitelist_count: number;
   packets_dropped: number;
   packets_accepted: number;
+  ban_capacity: number;
 }
 
 export interface WhitelistEntry {
@@ -362,7 +363,7 @@ export const WIRE_SIZES: Record<string, number> = {
   ConfigChange: 116,
   BanEntry: 95,
   ListBansResponse: 24,
-  StatsResponse: 60,
+  StatsResponse: 64,
   WhitelistEntry: 34,
   ListWhitelistResponse: 24,
   RateEntry: 88,

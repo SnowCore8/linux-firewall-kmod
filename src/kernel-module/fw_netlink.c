@@ -460,6 +460,7 @@ static void fw_nl_send_stats_response(u32 portid, u32 seq) {
   r->whitelist_count = cpu_to_be64(fw_wl_count());
   r->packets_dropped = cpu_to_be64(s.packets_dropped);
   r->packets_accepted = cpu_to_be64(s.packets_accepted);
+  r->ban_capacity = cpu_to_be32(fw_info.max_ban_entries);
 
   ret = netlink_unicast(fw_nl_sock, skb, portid, MSG_DONTWAIT);
   if (ret < 0)

@@ -19,7 +19,7 @@
     "message ConfigAck: 定长 20 字节",
     "message ConfigChange: 定长 116 字节",
     "message ListBansResponse: 定长 24 字节 + 尾部 BanEntry(95 字节) × N；u16 上限内最多 689 条",
-    "message StatsResponse: 定长 60 字节",
+    "message StatsResponse: 定长 64 字节",
     "message ListWhitelistResponse: 定长 24 字节 + 尾部 WhitelistEntry(34 字节) × N；u16 上限内最多 1926 条",
     "message ListRatesResponse: 定长 40 字节 + 尾部 RateEntry(88 字节) × N；u16 上限内最多 744 条",
     "message AnalysisResponse: 定长 4756 字节",
@@ -617,7 +617,7 @@
     },
     "StatsResponse": {
       "kind": "message",
-      "size": 60,
+      "size": 64,
       "fields": [
         {
           "name": "current_bans",
@@ -659,6 +659,13 @@
           "offset": 52,
           "size": 8,
           "type": "u64",
+          "tail": false
+        },
+        {
+          "name": "ban_capacity",
+          "offset": 60,
+          "size": 4,
+          "type": "u32",
           "tail": false
         }
       ],

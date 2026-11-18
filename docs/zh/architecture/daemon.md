@@ -282,9 +282,10 @@
 | 配置下发内核 | `configSink.ApplyConfig` 投影成 `SetConfig`；手工改文件、SIGHUP、SIGUSR1、PUT 共用同一出口 | `main.go` 的 `newConfigSink` |
 
 容量字段（`capacity.max_ban_entries` / `max_whitelist_entries` /
-`max_rate_entries` / `max_local_ip_cache`）在守护进程侧只做持久化与展示。
-`SetConfig` 消息没有容量字段，真正的上限是内核模块参数 `fw_max_*`
-（见 [内核模块](kernel-module.md)）。
+`max_rate_entries` / `max_local_ip_cache`）不经 `SetConfig` 下发，真正的上限是内核
+模块参数 `fw_max_*`（见 [内核模块](kernel-module.md)）。封禁表占用率的分母优先取内核
+统计响应的 `ban_capacity`，`max_ban_entries` 只在内核没有该读数时回退；其余三个
+容量字段只做持久化与展示。
 
 ## 持久化
 

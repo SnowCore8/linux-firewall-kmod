@@ -1152,10 +1152,11 @@ type ThreatLevel {
   # 在峰值时段乘 PeakMultiplier=1.5；基线尚未建立（有效值 <=0）时本字段取 0，因此不加分
   # ——「还没学会基线」不会被伪装成某个具体等级的结论
   pps_ratio: f64
-  # 0-1 的**比例**（不是百分数）：current_bans / 守护进程配置的条目上限
-  # （config.Capacity.MaxBanEntries，与下发给模块的 fw_max_ban_entries 同一个值）。
-  # 内核没有把实时上限带进 netlink 统计响应，分母只能取配置值；配置缺席或上限为 0 时
-  # 报 0。本字段已经是比例，前端不需要再自己除以某个写死的容量
+  # 0-1 的**比例**（不是百分数）：current_bans / 内核封禁表容量。
+  # 分母取自内核统计响应的 ban_capacity（contract/netlink.fwidl 的 StatsResponse），
+  # 即内核实际执行容量检查的上限；内核未提供读数（ban_capacity = 0）时回退到
+  # config.Capacity.MaxBanEntries，两者都缺席或为 0 时报 0。
+  # 本字段已经是比例，前端不需要再自己除以某个写死的容量
   ban_table_usage: f64
   # 最近 5 分钟内落进历史库 ban_events 的封禁数（与 today_bans 同一个缓存、同一个半开
   # 区间口径）

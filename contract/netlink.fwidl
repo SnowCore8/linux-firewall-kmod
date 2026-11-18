@@ -250,6 +250,11 @@ message StatsResponse {
     u64 whitelist_count
     u64 packets_dropped
     u64 packets_accepted
+    # 内核对封禁条目总数的真实上限：fw_info.max_ban_entries，加载时从模块参数
+    # fw_max_ban_entries 快照而来，内核的容量检查用的就是它。占用率必须拿它当分母，
+    # 守护进程配置的 capacity.max_ban_entries 不是内核实际执行的限额。
+    # 0 = 内核未提供读数，daemon 回退到配置上限。
+    u32 ban_capacity
 }
 
 # 白名单条目（ListWhitelistResponse 的尾部元素）

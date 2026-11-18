@@ -110,7 +110,8 @@ type Link struct {
 type Snapshot struct {
 	// SampledAt 是本快照最后一次被写入的时刻。
 	SampledAt time.Time
-	// Stats 是内核统计（零值表示从未采到）。
+	// Stats 是内核统计（零值表示从未采到）。其中 BanCapacity 是内核实际执行的
+	// 封禁条目上限，占用率一类比例按它做分母；0 表示内核未提供读数。
 	Stats contract.StatsResponse
 	// Rates 是速率表采样。
 	Rates Rates

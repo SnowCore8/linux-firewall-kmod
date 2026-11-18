@@ -7,6 +7,7 @@ package http
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/analysis"
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/contract"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/telemetry"
@@ -555,5 +557,41 @@ func TestStatsCacheDoesNotLeakAcrossDayOnQueryFailure(t *testing.T) {
 	}
 	if rows := api.banActivity(tomorrow); rows != nil {
 		t.Errorf("跨日查询失败 = %d 行，期望 nil（不得把昨日活动行画到今天）", len(rows))
+	}
+}
+
+// TestThreatLevelUsagePrefersKernelCapacity 核对占用率的分母优先取内核统计响应的真实容量：
+// 模块参数与守护进程配置可能不同，拿配置当分母会让占用率整体偏大或偏小。
+func TestThreatLevelUsagePrefersKernelCapacity(t *testing.T) {
+	cases := []struct {
+		name           string
+		configCapacity uint32
+		kernelCapacity uint32
+		currentBans    uint64
+		want           float64
+	}{
+		{"内核容量优先于配置", 100, 1000, 50, 0.05},
+		{"内核缺读数时回退配置", 100, 0, 50, 0.5},
+		{"两者都为 0 时占用率为 0", 0, 0, 50, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := newTestServer(t, func(cfg *APIConfig) {
+				cfg.GetCurrentConfig = func() *config.Config {
+					return &config.Config{Capacity: config.CapacityConfig{MaxBanEntries: tc.configCapacity}}
+				}
+				cfg.GetKernelSnapshot = func() telemetry.Snapshot {
+					return telemetry.Snapshot{
+						Stats: contract.StatsResponse{CurrentBans: tc.currentBans, BanCapacity: tc.kernelCapacity},
+						Link:  telemetry.Link{Lease: telemetry.LeaseHeld},
+					}
+				}
+			})
+
+			stats := get[StatsResponse](t, s, "/api/v2/stats")
+			if math.Abs(stats.ThreatLevel.BanTableUsage-tc.want) > 1e-9 {
+				t.Errorf("ban_table_usage = %v，期望 %v", stats.ThreatLevel.BanTableUsage, tc.want)
+			}
+		})
 	}
 }
