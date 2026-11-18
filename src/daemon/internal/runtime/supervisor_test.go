@@ -152,3 +152,30 @@ func TestSupervisorEmptyShutsDownCleanly(t *testing.T) {
 		t.Fatalf("空登记表关停应无结果，实际 %d", len(results))
 	}
 }
+
+// TestSupervisorPanicInvokesFatalHandler 验证执行体 panic 不再被 recover 静默吞掉。
+func TestSupervisorPanicInvokesFatalHandler(t *testing.T) {
+	s := NewSupervisor()
+	handled := make(chan string, 1)
+	s.SetFatalHandler(func(name string, _ any) { handled <- name })
+	token := NewShutdown()
+
+	s.Spawn("boom", token, func() { panic("test panic") })
+
+	select {
+	case name := <-handled:
+		if name != "boom" {
+			t.Fatalf("fatal handler 收到 %q，期望 boom", name)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("执行体 panic 未被 fatal handler 接住（会被静默吞掉）")
+	}
+
+	if !token.IsShutdown() {
+		t.Fatal("panic 后执行体令牌未置位")
+	}
+	results := s.Shutdown(time.Second)
+	if len(results) != 1 || results[0].Outcome != Joined {
+		t.Fatalf("关停结果 = %+v，期望单个 Joined", results)
+	}
+}

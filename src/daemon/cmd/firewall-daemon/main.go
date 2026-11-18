@@ -213,6 +213,12 @@ func run(args []string) error {
 		})
 	}
 
+	// 执行体 panic 是致命错误：不要让它被 recover 后静默。接到统一的 requestStop
+	// 路径，按正常关停顺序收尾并以非零码返回，systemd 会重新拉起。
+	sup.SetFatalHandler(func(name string, panicVal any) {
+		requestStop(fmt.Errorf("执行体 %s panic: %v", name, panicVal))
+	})
+
 	// Prometheus 指标注册表在整条装配链的最前面建立：内核链路、入站执行体、HTTP 面都要
 	// 往里写计数，而它们的装配顺序不固定（内核链路早于 HTTP）。此前它只在 HTTP 段里建，
 	// 于是 netlink 与配置重载这两组计数没有可写之处。禁用 HTTP 面（metrics_port=0）

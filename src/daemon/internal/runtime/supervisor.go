@@ -32,6 +32,9 @@ type StopResult struct {
 // 死锁：上游若阻塞向队列投递，此时下游仍在消费，投递得以完成；上游排空退出后才轮到下游。
 type Supervisor struct {
 	executors []executorEntry
+	// fatal 是执行体 panic 的兜底回调；未设置时 panic 原样抛出，让进程 fail-fast。
+	// 必须在 Spawn 之前设置。
+	fatal func(name string, panicVal any)
 }
 
 // executorEntry 是一个已登记的执行体。
@@ -46,6 +49,15 @@ type executorEntry struct {
 
 // NewSupervisor 新建空登记表。
 func NewSupervisor() *Supervisor { return &Supervisor{} }
+
+// SetFatalHandler 注册执行体 panic 的兜底处理。
+//
+// panic 会先置位该执行体的关停令牌，再同步调用 handler；handler 应尽快触发全局
+// 优雅关停（组合根把它接到 requestStop）。未设置 handler 时 panic 重新抛出，由
+// 进程以非零码退出，交给 systemd 的 Restart=on-failure——绝不静默吞掉。
+func (s *Supervisor) SetFatalHandler(fn func(name string, panicVal any)) {
+	s.fatal = fn
+}
 
 // Len 返回已登记执行体数量。
 func (s *Supervisor) Len() int { return len(s.executors) }
@@ -67,7 +79,13 @@ func (s *Supervisor) Spawn(name string, token *Shutdown, body func()) {
 		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("执行体 goroutine panic，触发优雅关停", "name", name, "panic", r)
+				slog.Error("执行体 goroutine panic", "name", name, "panic", r)
+				token.Request()
+				if s.fatal != nil {
+					s.fatal(name, r)
+					return
+				}
+				panic(r)
 			}
 		}()
 		body()
