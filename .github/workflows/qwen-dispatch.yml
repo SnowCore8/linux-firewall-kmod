@@ -71,7 +71,7 @@ jobs:
         id: 'mint_identity_token'
         if: |-
           ${{ vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID }}
-        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        uses: 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510' # ratchet:actions/create-github-app-token@v2
         with:
           # dispatch 只读评论计数、发闸门说明，用顾清的身份即可。
           # 申请的权限必须落在 App 已授权的范围内，多要一档 GitHub 就回 422，
@@ -85,7 +85,7 @@ jobs:
           permission-pull-requests: 'read'
 
       - name: 'Check out the routing rules'
-        uses: 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683' # ratchet:actions/checkout@v4
+        uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # ratchet:actions/checkout@v4
         with:
           # 必须显式钉在默认分支。checkout 默认检出的 ref 在 PR 事件下是那个 PR 的
           # 合并提交，而这里随后要 node 执行检出来的 .mjs —— 于是 fork PR 里的代码
@@ -203,7 +203,7 @@ jobs:
         id: 'mint_identity_token'
         if: |-
           ${{ vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID }}
-        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        uses: 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510' # ratchet:actions/create-github-app-token@v2
         with:
           app-id: '${{ vars.APP_ID_CLARA || vars.APP_ID_TRIAGER || vars.APP_ID }}'
           private-key: '${{ secrets.APP_PRIVATE_KEY_CLARA || secrets.APP_PRIVATE_KEY_TRIAGER || secrets.APP_PRIVATE_KEY }}'
