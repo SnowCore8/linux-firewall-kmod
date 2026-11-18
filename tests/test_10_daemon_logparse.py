@@ -20,6 +20,7 @@ from .conftest import (
     daemon_run_probe,
     generate_test_yaml,
     run_daemon_captured,
+    run_daemon_then_append_log,
     wait_procfs,
 )
 
@@ -35,28 +36,24 @@ class TestDaemonLogparse:
     def test_log_parse_function(self, tmp_path):
         """10.1 日志解析功能"""
         test_log = tmp_path / "logparse.log"
-        test_log.write_text(
+        test_log.write_text("")
+
+        yaml_config = tmp_path / "logparse.yaml"
+        generate_test_yaml(str(yaml_config), str(test_log), max_retries=1, findtime=1, ban_time=5)
+
+        # daemon 启动时把偏移定位到文件末尾，日志必须在它起来之后追加。
+        ban_count = run_daemon_then_append_log(
+            [str(DAEMON_PATH), "-c", str(yaml_config)],
+            str(test_log),
             f"{LOG_LINE_SSHD}\n"
             f"{LOG_LINE_SSHD_INVALID}\n"
             f"{LOG_LINE_VSFTPD}\n"
             f"{LOG_LINE_NGINX}\n"
             f"{LOG_LINE_FRP}\n"
             "Invalid line with no IP address\n"
-            "Mar 10 10:30:01 server sshd[1234]: Failed password for root from port ssh2\n"
+            "Mar 10 10:30:01 server sshd[1234]: Failed password for root from port ssh2\n",
         )
-
-        yaml_config = tmp_path / "logparse.yaml"
-        generate_test_yaml(str(yaml_config), str(test_log), max_retries=1, findtime=1, ban_time=5)
-
-        run_daemon_captured([str(DAEMON_PATH), "-c", str(yaml_config)], timeout=5)
-
-        # 轮询等待封禁出现（日志解析→正则匹配→封禁下发是异步链路，固定 sleep 可能不足）
         assert PROC_BANS.exists(), "守护进程运行后 procfs 不可访问"
-        deadline = time.monotonic() + 4.0
-        ban_count = count_bans()
-        while ban_count < 1 and time.monotonic() < deadline:
-            time.sleep(0.2)
-            ban_count = count_bans()
         assert ban_count >= 1, (
             "日志解析后无 IP 被封禁（5 行含有效 IP 的失败日志应触发封禁，"
             "可能是正则未匹配）"
@@ -65,19 +62,20 @@ class TestDaemonLogparse:
     def test_special_char_log(self, tmp_path):
         """10.2 特殊字符日志处理"""
         special_log = tmp_path / "special.log"
-        special_log.write_text(
-            "Mar 10 10:30:01 server sshd[1234]: Failed password for root from 192.0.2.1 port 12345 ssh2\n"
-            "Mar 10 10:30:02 server sshd[1235]: Failed password for <script>alert('xss')</script> from 192.0.2.2 port 12346 ssh2\n"
-            "Mar 10 10:30:03 server sshd[1236]: Failed password for root from 192.0.2.3 port 12347 ssh2\n"
-        )
+        special_log.write_text("")
 
         special_yaml = tmp_path / "special.yaml"
         generate_test_yaml(str(special_yaml), str(special_log), max_retries=1, findtime=1, ban_time=5)
 
-        run_daemon_captured([str(DAEMON_PATH), "-c", str(special_yaml)], timeout=5)
-        time.sleep(1)
-
+        ban_count = run_daemon_then_append_log(
+            [str(DAEMON_PATH), "-c", str(special_yaml)],
+            str(special_log),
+            "Mar 10 10:30:01 server sshd[1234]: Failed password for root from 192.0.2.1 port 12345 ssh2\n"
+            "Mar 10 10:30:02 server sshd[1235]: Failed password for <script>alert('xss')</script> from 192.0.2.2 port 12346 ssh2\n"
+            "Mar 10 10:30:03 server sshd[1236]: Failed password for root from 192.0.2.3 port 12347 ssh2\n",
+        )
         assert PROC_BANS.exists(), "特殊字符日志处理后 procfs 不可访问"
+        assert ban_count >= 1, "特殊字符日志未触发封禁"
 
     def test_empty_log(self, tmp_path):
         """10.3 空日志文件处理"""

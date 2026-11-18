@@ -166,12 +166,16 @@ def get_stat(name: str) -> int:
 
 
 def count_bans() -> int:
-    """获取封禁列表行数"""
+    """获取封禁列表条目数。
+
+    /proc/firewall/bans 带两行头部与两行尾部汇总（Total: ...），直接数非空行会稳定
+    多出 4 行；这里只数以地址开头的条目行。
+    """
     try:
-        lines = PROC_BANS.read_text().strip().splitlines()
-        return len([l for l in lines if l.strip()])
+        lines = PROC_BANS.read_text().splitlines()
     except (FileNotFoundError, PermissionError):
         return 0
+    return len([l for l in lines if re.match(r"^[0-9a-fA-F:.]+(?:/\d+)?\s", l)])
 
 
 def count_whitelist() -> int:
@@ -349,6 +353,33 @@ def daemon_starts_ok(cmd: list[str]) -> tuple[bool, int]:
     except subprocess.TimeoutExpired:
         terminate_process(proc)
         return True, 124
+
+
+def run_daemon_then_append_log(
+    cmd: list[str], log_path: str, content: str, startup_wait: float = 3.0, ban_wait: float = 8.0
+) -> int:
+    """启动 daemon，等它把日志定位到末尾后再追加新行，返回观察期结束时的封禁数。
+
+    SourceReader.OpenAtEnd 在启动时把偏移定位到文件末尾（历史内容不回放），因此
+    「先写日志再起 daemon」的用例永远看不到新行；必须在 daemon 起来之后追加。
+    """
+    mark_daemon_launched()
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        time.sleep(startup_wait)
+        with open(log_path, "a", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+        deadline = time.monotonic() + ban_wait
+        count = 0
+        while time.monotonic() < deadline:
+            count = count_bans()
+            if count > 0:
+                break
+            time.sleep(0.2)
+        return count
+    finally:
+        terminate_process(proc)
 
 
 def is_daemon_running() -> bool:
@@ -644,10 +675,17 @@ def generate_test_yaml(
     max_retries: int = 1,
     findtime: int = 1,
     ban_time: int = 5,
-    metrics_port: int = 9119,
+    metrics_port: int | None = None,
     jail_name: str = "sshd",
 ):
-    """生成测试用 YAML 配置"""
+    """生成测试用 YAML 配置。
+
+    metrics_port 缺省时取 free_tcp_port()：自起 daemon 的用例必须独占一个空闲端口，
+    否则会在 daemon-up 形态（外部 daemon 监听 9119）或与其它用例并发时撞端口。
+    端口约定见 tests/README.md「两种测试形态」。
+    """
+    if metrics_port is None:
+        metrics_port = free_tcp_port()
     config = {
         "defaults": {
             "max_retries": max_retries,

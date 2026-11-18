@@ -123,13 +123,22 @@ sudo python3 -m pytest --html=report.html --self-contained-html
 
 ### 两种测试形态
 
+两种形态用 `-m` 选择，跑全套前先确认目标形态：
+
 1. **daemon-up**: 假设外部已有 daemon 运行（test_15/16/17/19）
    - 使用 `running_daemon` fixture
    - 外部 daemon 不存在时 skip
+   - 端口约定：外部 daemon 监听 `config/default.yaml` 的 `defaults.metrics_port`
+     （默认 9119），daemon-up 用例一律访问该端口
 
 2. **daemon-down**: 自行起 daemon（test_09-14, 18, 20-22）
    - 使用 `daemon_starts_ok` / `run_daemon_captured` 等辅助函数
    - 短时启动 daemon，测试完立即停止
+   - 端口约定：每个自起实例用 `free_tcp_port()` 独占一个空闲端口，
+     `generate_test_yaml()` 的 `metrics_port` 缺省即取空闲端口；用例不得写死 9119，
+     否则可能撞上外部 daemon 或其它用例
+   - 需要验证仓库默认配置的用例（test_09 的 9.3/9.5）把 `default.yaml` 复制到临时
+     目录，仅替换 `metrics_port` 后再启动，配置文件其余内容保持原样
 
 ## 配置常量
 
