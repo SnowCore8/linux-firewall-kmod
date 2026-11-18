@@ -7,8 +7,7 @@
  */
 
 import { expect, test } from '@playwright/test'
-import { stampRestRequest } from '../../frontend/src/hooks/useLiveData.ts'
-import { nextSeq, pickFresher } from '../../frontend/src/lib/freshness.ts'
+import { nextSeq, pickFresher, stampRestRequest } from '../../frontend/src/lib/freshness.ts'
 
 test.describe('useLiveData 新鲜度仲裁', () => {
   test('REST 在途期间到达的 SSE 帧不会被晚到的 REST 响应覆盖', async () => {

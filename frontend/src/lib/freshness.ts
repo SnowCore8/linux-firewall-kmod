@@ -25,6 +25,31 @@ export function currentSeq(): number {
   return counter
 }
 
+/** REST 数据与其「发起时」序号绑定的载荷，供 useAsync 原样传递。 */
+export interface StampedRest<T> {
+  data: T
+  seq: number
+}
+
+/**
+ * 把一次 REST 调用的结果与**发起时刻**分配的序号绑在一起。
+ *
+ * 序号必须在发起时取，不能等响应落地再取：REST 在途期间 SSE 可能已推来更新的帧，
+ * 落地时才取号会让慢响应用一个更大的号反过来盖掉那些帧（Jails/Whitelist 要等下一轮
+ * 30 秒轮询才纠正）。每次调用都重新取号，重试/取消后重新发起的请求不会复用旧号。
+ *
+ * 它不依赖 React 与 API 客户端；放在这个纯逻辑模块里，E2E 用例才能直接执行它，
+ * 不必经 useLiveData/useAsync 把 import.meta.env 拖进用例加载链。
+ */
+export function stampRestRequest<T>(
+  fetcher: (signal: AbortSignal) => Promise<T>,
+): (signal: AbortSignal) => Promise<StampedRest<T>> {
+  return (signal) => {
+    const seq = nextSeq()
+    return fetcher(signal).then((data) => ({ data, seq }))
+  }
+}
+
 /**
  * 在两个带 seq 的来源里挑更新的那个。
  * a/b 任一为空则取另一个；都非空取 seq 更大者；相等时偏向 a（约定 a 为实时源）。

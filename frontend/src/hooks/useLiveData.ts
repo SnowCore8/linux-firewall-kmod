@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAsync } from './useAsync.ts'
-import { nextSeq, pickFresher } from '../lib/freshness.ts'
+import { pickFresher, stampRestRequest, type StampedRest } from '../lib/freshness.ts'
 import type { ApiError } from '../api/client.ts'
 
 /**
@@ -61,28 +61,6 @@ function shallowEqual(a: any, b: any): boolean {
     }
   }
   return true
-}
-
-/** REST 数据与其「发起时」序号绑定的载荷，供 useAsync 原样传递。 */
-interface StampedRest<T> {
-  data: T
-  seq: number
-}
-
-/**
- * 把一次 REST 调用的结果与**发起时刻**分配的序号绑在一起。
- *
- * 序号必须在发起时取，不能等响应落地再取：REST 在途期间 SSE 可能已推来更新的帧，
- * 落地时才取号会让慢响应用一个更大的号反过来盖掉那些帧（Jails/Whitelist 要等下一轮
- * 30 秒轮询才纠正）。每次调用都重新取号，重试/取消后重新发起的请求不会复用旧号。
- */
-export function stampRestRequest<T>(
-  fetcher: (signal: AbortSignal) => Promise<T>,
-): (signal: AbortSignal) => Promise<StampedRest<T>> {
-  return (signal) => {
-    const seq = nextSeq()
-    return fetcher(signal).then((data) => ({ data, seq }))
-  }
 }
 
 export function useLiveData<T>(options: LiveDataOptions<T>): LiveDataResult<T> {
