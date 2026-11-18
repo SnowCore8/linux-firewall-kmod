@@ -27,20 +27,26 @@ class TestResourceMgmt:
 
     def test_stability_after_many_ops(self, clean_bans):
         """11.2 大量操作后模块稳定性"""
+        failures = 0
         for i in range(1, 51):
             try:
                 PROC_BANS.write_text(f"203.0.113.{i % 256}")
             except (PermissionError, OSError):
-                pass
+                failures += 1
 
+        assert failures == 0, f"封禁写入失败 {failures}/50 次"
         wait_procfs()
-        assert PROC_BANS.exists(), "大量操作后模块无响应"
+        assert count_bans() == 50, f"写入 50 条后实际 {count_bans()} 条"
 
         for i in range(1, 51):
             try:
                 PROC_BANS.write_text(f"unban 203.0.113.{i % 256}")
             except (PermissionError, OSError):
-                pass
+                failures += 1
+
+        assert failures == 0, f"累计写入/解封失败 {failures} 次"
+        wait_procfs()
+        assert count_bans() == 0, f"解封 50 条后实际残留 {count_bans()} 条"
 
     def test_ban_capacity_boundary(self, clean_bans):
         """11.3 封禁容量边界测试"""

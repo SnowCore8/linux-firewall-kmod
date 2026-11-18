@@ -62,6 +62,8 @@ FRONTEND_STAMP   := $(BUILD_OBJ_DIR)/.frontend.stamp
 
 # 最终输出路径
 KERNEL_MODULE := $(KERNEL_BUILD_DIR)/firewall.ko
+# 契约生成物变更戳：参与 .ko 的普通前置比较，避免改 .fwidl 后继续用旧模块
+CONTRACT_STAMP := $(BUILD_DIR)/obj/.contract.stamp
 DAEMON_BIN    := $(DAEMON_BUILD_DIR)/firewall-daemon
 
 # ============================================================================
@@ -232,10 +234,15 @@ kmod-remote:
 # 内核模块编译（标准目标）
 .PHONY: kernel-module kmod
 kmod: kernel-module
-kernel-module: contract $(KERNEL_MODULE)
+kernel-module: $(KERNEL_MODULE)
+
+$(CONTRACT_STAMP): $(wildcard contract/*.fwidl) contract/gen.py
+	@mkdir -p $(dir $@)
+	@$(MAKE) contract
+	@touch $@
 
 $(KERNEL_MODULE): $(wildcard $(KERNEL_SRC_DIR)/*.c) $(wildcard $(KERNEL_SRC_DIR)/*.h) \
-	$(KERNEL_SRC_DIR)/Makefile | contract
+	$(KERNEL_SRC_DIR)/Makefile $(CONTRACT_STAMP)
 	@if [ ! -d "$(KDIR)" ]; then \
 		echo ""; \
 		echo "======================================================="; \
@@ -420,11 +427,7 @@ ci-contract:
 	@echo "═══════════════════════════════════════════════════════════"
 	@echo "时间: $$(date '+%Y-%m-%d %H:%M:%S')"
 	@echo ""
-	@echo "生成契约文件..."
-	@make contract >/dev/null
-	@echo "✓ 契约文件生成完成"
-	@echo ""
-	@echo "检查契约漂移..."
+	@echo "检查契约漂移（以入库生成物为基线，不先重新生成）..."
 	@make contract-drift || { \
 		echo "❌ 契约漂移检查失败"; \
 		echo "   运行 'python3 contract/gen.py' 重新生成"; \
@@ -489,7 +492,7 @@ ci-test:
 		echo "时间: $$(date '+%Y-%m-%d %H:%M:%S')"; \
 		echo ""; \
 		echo "运行单元测试..."; \
-		cd src/daemon && go test ./... -v 2>&1 | tail -20 || { \
+		bash -o pipefail -c 'cd src/daemon && go test ./... -v 2>&1 | tail -20' || { \
 			echo "❌ 单元测试失败"; \
 			exit 1; \
 		}; \
@@ -497,7 +500,7 @@ ci-test:
 		echo "✓ 单元测试通过"; \
 		echo ""; \
 		echo "运行集成测试（需要 root）..."; \
-		sudo python3 -m pytest tests/ -v 2>&1 | tail -30 || { \
+		bash -o pipefail -c 'sudo python3 -m pytest tests/ -v 2>&1 | tail -30' || { \
 			echo "❌ 集成测试失败"; \
 			exit 1; \
 		}; \
@@ -1020,6 +1023,8 @@ distclean: clean
 	@find $(KERNEL_SRC_DIR) -name ".*.d" -delete 2>/dev/null || true
 	@find $(KERNEL_SRC_DIR) -name ".tmp_versions" -exec rm -rf {} + 2>/dev/null || true
 	@find $(KERNEL_SRC_DIR) -name "*.symversions" -delete 2>/dev/null || true
+	@# 源码树里被 .gitignore 忽略的 kbuild 产物（distclean 才是「回到干净检出」）
+	@find $(KERNEL_SRC_DIR) -maxdepth 1 \( -name '*.o' -o -name '*.ko' -o -name '*.mod' -o -name '*.mod.c' -o -name 'Module.symvers' -o -name 'modules.order' -o -name '*.cmd' \) -delete 2>/dev/null || true
 	@# compile_commands.json 及其 clangd 索引不是构建产物，clean 保留、distclean 清掉
 	@rm -rf .cache
 	@rm -f compile_commands.json

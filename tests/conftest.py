@@ -679,28 +679,40 @@ def generate_test_yaml(
 
 @pytest.fixture(scope="session", autouse=True)
 def session_setup():
-    """会话级设置：确保模块加载"""
-    if os.geteuid() != 0:
-        pytest.skip("需要 root 权限运行测试")
+    """会话级设置：尽力加载模块，失败时不跳过整场。
 
-    if not KERNEL_MODULE_PATH.exists():
-        pytest.skip(f"内核模块不存在: {KERNEL_MODULE_PATH}")
-
-    if not check_module_ready():
-        if not load_module():
-            pytest.skip("内核模块加载失败")
-        time.sleep(1)
+    会话级 pytest.skip 会把标记 no_module 的用例一起跳过，降级环境于是
+    「0 个断言、退出码 0」——CI 假绿正是这么来的。模块是否可用交由每个
+    用例的 test_isolation 判断。
+    """
+    module_ready = False
+    if os.geteuid() == 0 and KERNEL_MODULE_PATH.exists():
+        module_ready = check_module_ready()
+        if not module_ready:
+            module_ready = load_module()
+            if module_ready:
+                time.sleep(1)
 
     yield
 
-    # 会话结束清理
-    reset_all_data()
-    unload_module()
+    if module_ready:
+        reset_all_data()
+        unload_module()
 
 
 @pytest.fixture(autouse=True)
-def test_isolation():
-    """每个测试前后的数据隔离"""
+def test_isolation(request):
+    """每个测试前后的数据隔离。
+
+    no_module 用例不碰 procfs，降级环境（模块不可加载）也要真实执行。
+    """
+    if "no_module" in request.node.keywords:
+        yield
+        return
+
+    if os.geteuid() != 0:
+        pytest.skip("需要 root 权限运行测试")
+
     reset_all_data()
     time.sleep(0.3)
 

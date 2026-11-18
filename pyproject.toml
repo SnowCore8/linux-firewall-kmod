@@ -16,6 +16,7 @@ markers = [
     "slow: 运行时间超过 10 秒的测试（压力测试、性能测试）",
     "requires_daemon: 需要外部 daemon 运行（test_15/16/17/19）",
     "requires_module: 需要内核模块加载（大多数集成测试）",
+    "no_module: 不依赖内核模块与 procfs，降级环境也执行",
     "requires_sqlite3: 需要 sqlite3 CLI 工具（test_12 永久封禁）",
     "e2e: 端到端测试（依赖真实网络环境）",
     "stress: 压力测试（大量并发、高频操作）",

@@ -20,6 +20,7 @@ class TestDaemonConfig:
         if not DAEMON_PATH.exists():
             pytest.skip(f"守护进程不存在: {DAEMON_PATH}")
 
+    @pytest.mark.no_module
     def test_daemon_help(self):
         """9.1 --help 正常"""
         result = subprocess.run(
@@ -30,10 +31,12 @@ class TestDaemonConfig:
         )
         assert result.returncode == 0, f"--help 失败: {result.stderr}"
 
+    @pytest.mark.no_module
     def test_config_dir_exists(self):
         """9.2 config/ 目录存在"""
         assert CONFIG_DIR.is_dir(), f"config 目录不存在: {CONFIG_DIR}"
 
+    @pytest.mark.no_module
     def test_default_yaml_exists(self):
         """9.2 default.yaml 存在"""
         default_yaml = CONFIG_DIR / "default.yaml"
@@ -67,6 +70,7 @@ class TestDaemonConfig:
         ok, rc = daemon_starts_ok([str(DAEMON_PATH), "-c", str(default_yaml)])
         assert ok, f"单配置文件加载失败 (退出码={rc})"
 
+    @pytest.mark.no_module
     def test_invalid_config(self, tmp_path):
         """9.6 无效配置处理"""
         invalid_config = tmp_path / "invalid.yaml"
@@ -81,6 +85,7 @@ class TestDaemonConfig:
         rc = result.returncode
         assert rc < 128 or rc == 137, f"无效 YAML 处理异常 (退出码={rc})"
 
+    @pytest.mark.no_module
     def test_nonexistent_config(self):
         """9.7 不存在的配置文件"""
         result = subprocess.run(

@@ -22,7 +22,8 @@ override_dh_auto_install:
 
 	# DKMS 源码树：dkms.conf 的 PACKAGE_VERSION 占位符在构建期替换
 	install -d $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/src/kernel-module
-	cp -r src/kernel-module/* $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/src/kernel-module/
+	cp src/kernel-module/*.c src/kernel-module/*.h src/kernel-module/Makefile \
+	    $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/src/kernel-module/
 	install -d $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/contract/generated
 	cp contract/generated/*.h $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/contract/generated/
 	install -m 644 Makefile.dkms dkms.conf $(PKGDIR)/usr/src/linux-firewall-kmod-$(VERSION)/
