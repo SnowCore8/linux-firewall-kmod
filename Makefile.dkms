@@ -1,7 +1,10 @@
 # Makefile.dkms - DKMS 构建入口
 # 由 DKMS 在 build 根目录调用，源码在 src/kernel-module/
 
-KVER  ?= $(shell uname -r)
+# DKMS 以 `make ... KERNELRELEASE=<目标内核>` 调用本文件。不采纳它就只能拿正在运行的
+# 内核头文件编译，给别的内核装出 vermagic 不匹配的 .ko（实测 6.8.0-149 编译用的是
+# 7.0.0-38 的头文件 / make.log 头部即写明）。KVER 优先取 DKMS 传入的目标内核。
+KVER  ?= $(if $(KERNELRELEASE),$(KERNELRELEASE),$(shell uname -r))
 KDIR  := /lib/modules/$(KVER)/build
 PWD   := $(shell pwd)
 
