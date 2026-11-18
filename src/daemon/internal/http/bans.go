@@ -20,6 +20,15 @@ import (
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/persist"
 )
 
+// banLedgerSink 是 KernelBan 的可选扩展：把手工封禁的底账推迟到内核确认之后。
+//
+// 生产 banSink 实现它；测试里的 fake 不实现，HTTP 层退回「下发后同步写库」的路径，
+// 既保留单测形状，又让生产路径不会在内核异步拒绝时留下幽灵底账。
+type banLedgerSink interface {
+	InsertPending(info bans.BanInfo) bool
+	RollbackInsert(ip string)
+}
+
 // KernelBan 是内核封禁下发与解封的最小接口。
 //
 // 由组合根注入 banSink 实现；接口定义在 http 包以避免循环依赖。
@@ -157,6 +166,7 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 	info := bans.BanInfo{
 		IP:          ip,
 		PrefixLen:   bans.FullPrefixLen(addr),
+		JailName:    "api",
 		Reason:      reason,
 		BannedAt:    now,
 		IsPermanent: isPermanent,
@@ -165,9 +175,16 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		info.ExpiresAt = now + duration
 	}
 
-	// 占位与「等待内核确认」标记在同一锁周期落下：两者分开时，中间跑进来的一轮对账会
-	// 把这条内核列表里尚未出现的封禁当幽灵摘掉（同 runtime 自动路径）。
-	if !bans.GlobalCache().InsertPending(info, time.Now()) {
+	// 生产 banSink 实现 banLedgerSink：占位与待确认底账都由它登记，内核确认后再写库；
+	// 测试里的 fake KernelBan 不实现，退回同步写库路径。
+	tracker, deferredLedger := h.kernelBan.(banLedgerSink)
+	inserted := false
+	if deferredLedger {
+		inserted = tracker.InsertPending(info)
+	} else {
+		inserted = bans.GlobalCache().InsertPending(info, time.Now())
+	}
+	if !inserted {
 		WriteCode(w, httpcontract.Code40001, "封禁失败：该 IP 已在封禁表中 "+ip)
 		return
 	}
@@ -182,31 +199,19 @@ func (h *APIHandlers) CreateBan(w http.ResponseWriter, r *http.Request) {
 		prefixLen := bans.FullPrefixLen(addr)
 		if sendErr := h.kernelBan.Send(addr, prefixLen, durationSecs, reason); sendErr != nil {
 			h.server.logger.Error("内核封禁下发失败", "ip", ip, "error", sendErr)
-			bans.GlobalCache().Remove(ip)
+			if deferredLedger {
+				tracker.RollbackInsert(ip)
+			} else {
+				bans.GlobalCache().Remove(ip)
+			}
 			WriteCode(w, httpcontract.Code40001, "封禁失败：内核未确认")
 			return
 		}
 	}
 
-	if h.db != nil {
-		// 先写历史、再拿它返回的累计序号写事件：手工封禁没有判定层告诉这里「这是第几封」，
-		// 序号只能出自 ban_history。写死 1 会让重复手工封禁的地址在分级成效里永远停在
-		// 第 1 级，复发统计也认不出它。历史写失败时退化成 1（底账不能因为上一步失败就整条不记）。
-		historyCount, err := h.db.RecordBanHistory(ip, isPermanent)
-		if err != nil {
-			h.server.logger.Error("record ban history", "error", err)
-			historyCount = 1
-		}
-		if err := h.db.RecordBanEvent(ip, "api", historyCount, isPermanent, info.PlannedDuration()); err != nil {
-			h.server.logger.Error("record ban event", "error", err)
-		}
-		// 信誉扣分与自动路径同一个常量（persist.DefaultBanPenalty）：漏掉它，手工封禁过的地址
-		// 在这张表里没有 last_ban、total_bans 也停在 0，下一次自动判定读到的信誉偏高，
-		// 渐进时长与低信誉阈值一律算错。扣分失败不回滚封禁——封禁已经在内核与镜像里生效，
-		// 撤销它比少扣一次分代价大得多。
-		if err := h.db.RecordBan(ip, persist.DefaultBanPenalty); err != nil {
-			h.server.logger.Error("record ban reputation", "ip", ip, "error", err)
-		}
+	// 生产路径的底账由 banSink 在内核 BanStateChange 确认后写；fake 路径保持同步。
+	if !deferredLedger {
+		h.recordManualBanLedger(ip, "api", isPermanent, info.PlannedDuration())
 	}
 
 	h.publishBans()
@@ -380,6 +385,7 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().Unix()
+	tracker, deferredLedger := h.kernelBan.(banLedgerSink)
 	var successCount, failCount int
 	details := make([]string, 0, len(req.IPs))
 	for _, ip := range req.IPs {
@@ -394,13 +400,20 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 		info := bans.BanInfo{
 			IP:          canonical,
 			PrefixLen:   bans.FullPrefixLen(addr),
+			JailName:    "api",
 			Reason:      reason,
 			BannedAt:    now,
 			IsPermanent: false,
 			ExpiresAt:   now + int64(duration),
 		}
 
-		if !bans.GlobalCache().InsertPending(info, time.Now()) {
+		inserted := false
+		if deferredLedger {
+			inserted = tracker.InsertPending(info)
+		} else {
+			inserted = bans.GlobalCache().InsertPending(info, time.Now())
+		}
+		if !inserted {
 			failCount++
 			details = append(details, canonical+": 该 IP 已在封禁表中")
 			continue
@@ -411,7 +424,11 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 			prefixLen := bans.FullPrefixLen(addr)
 			if sendErr := h.kernelBan.Send(addr, prefixLen, uint32(duration), reason); sendErr != nil {
 				h.server.logger.Error("batch ban kernel send failed", "ip", canonical, "error", sendErr)
-				bans.GlobalCache().Remove(canonical)
+				if deferredLedger {
+					tracker.RollbackInsert(canonical)
+				} else {
+					bans.GlobalCache().Remove(canonical)
+				}
 				failCount++
 				details = append(details, canonical+": 内核未确认")
 				continue
@@ -419,24 +436,9 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 		}
 
 		successCount++
-		if h.db != nil {
-			// 批量封禁同样要进 ban_events：这一张表是分析面（复发率、周期攻击、时长直方图、
-			// 分级成效）唯一的底账。只写 ban_history 的话，从面板批量封的那批地址在分析里
-			// 等于没发生过——两个表各写一半是旧实现留下的裂缝。序号取 ban_history 加完之后的
-			// 累计值（同 CreateBan），写死 1 会把重复批量封禁读成「每次都只封了一次」。
-			historyCount, err := h.db.RecordBanHistory(canonical, false)
-			if err != nil {
-				h.server.logger.Error("record ban history", "ip", canonical, "error", err)
-				historyCount = 1
-			}
-			if err := h.db.RecordBanEvent(canonical, "api", historyCount, false, info.PlannedDuration()); err != nil {
-				h.server.logger.Error("record ban event", "ip", canonical, "error", err)
-			}
-			// 同 CreateBan：批量封的地址也要扣信誉分。扣分只发生在这一条成功下发之后，
-			// 失败的那几条上面已 continue，不会出现「没封成却扣了分」。
-			if err := h.db.RecordBan(canonical, persist.DefaultBanPenalty); err != nil {
-				h.server.logger.Error("record ban reputation", "ip", canonical, "error", err)
-			}
+		// 生产路径等内核确认后由 banSink 写底账；fake 路径保持同步。
+		if !deferredLedger {
+			h.recordManualBanLedger(canonical, "api", false, info.PlannedDuration())
 		}
 	}
 
@@ -448,6 +450,53 @@ func (h *APIHandlers) BatchBan(w http.ResponseWriter, r *http.Request) {
 		FailedCount: uint64(failCount),
 		Details:     details,
 	})
+}
+
+// recordManualBanLedger 写一次手工封禁的底账：历史 → 事件 → 信誉，最后同步判定层缓存。
+//
+// 手工封禁不经过 runtime 的 banSink（那边的 recordBanLedger 会顺手调 NoteBan），所以这
+// 三步与 Facts 同步必须在这里补上：
+//   - 先写历史再拿它返回的累计序号写事件。手工封禁没有判定层告诉这里「这是第几封」，
+//     序号只能出自 ban_history；写死 1 会让重复手工封禁的地址在分级成效里永远停在第 1 级。
+//     历史写失败时事件序号退化成 1——底账不能因为上一步失败就整条不记。
+//   - 信誉扣分与自动路径同一个常量（persist.DefaultBanPenalty）。漏掉它，手工封禁过的
+//     地址在 ip_reputation 里没有 last_ban、total_bans 也停在 0，下一次自动判定读到的
+//     信誉偏高，渐进时长与低信誉阈值一律算错。
+//   - 三步走完调 Facts.NoteBan：库里次数与分数都变了，判定层缓存必须跟着走。
+//
+// 每一步失败只记日志并交给重试队列补写，不回滚封禁——封禁已经在内核与镜像里生效，
+// 撤销它比少写一条底账代价大得多。db 未装配时什么也不做；facts 可空。
+func (h *APIHandlers) recordManualBanLedger(ip, jail string, isPermanent bool, planned *int64) {
+	if h.db == nil {
+		return
+	}
+	historyCount, err := h.db.RecordBanHistory(ip, isPermanent)
+	if err != nil {
+		h.server.logger.Error("record ban history", "ip", ip, "error", err)
+		historyCount = 1
+		if h.retryQueue != nil {
+			h.retryQueue.EnqueueBanHistory(ip, isPermanent)
+		}
+	}
+	if err := h.db.RecordBanEvent(ip, jail, historyCount, isPermanent, planned); err != nil {
+		h.server.logger.Error("record ban event", "ip", ip, "error", err)
+		if h.retryQueue != nil {
+			h.retryQueue.EnqueueBanEvent(ip, jail, historyCount, isPermanent, planned)
+		}
+	}
+	if err := h.db.RecordBan(ip, persist.DefaultBanPenalty); err != nil {
+		h.server.logger.Error("record ban reputation", "ip", ip, "error", err)
+		if h.retryQueue != nil {
+			h.retryQueue.EnqueueBanReputation(ip, persist.DefaultBanPenalty)
+		}
+	}
+	// 库里的封禁次数与信誉分都被本次底账改过了，判定层缓存必须同步；否则渐进式时长
+	// 读的还是封禁前的旧次数。ip 已由调用方归一成规范形式。
+	if h.facts != nil {
+		if addr, err := netip.ParseAddr(ip); err == nil {
+			h.facts.NoteBan(addr)
+		}
+	}
 }
 
 // BanDetail 报单个 IP 的封禁详情与历史记录（GET /api/v2/bans/{ip}/detail）。

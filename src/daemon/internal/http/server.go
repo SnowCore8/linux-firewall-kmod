@@ -7,8 +7,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/httpcontract"
 )
 
 type Server struct {
@@ -127,8 +130,26 @@ func (s *Server) MaxConnections() int {
 	return s.maxConns
 }
 
+// isSSERequest 报告请求是否走两条长驻 SSE 流。
+//
+// 它们各自有契约声明的名额账本（events 10、logs 5），不再占普通请求配额：否则日志页
+// 开满连接就会把事件流一起饿死，而两条流自己的 503 已经是契约形状。
+func isSSERequest(r *http.Request) bool {
+	switch r.URL.Path {
+	case strings.TrimPrefix(httpcontract.RouteGetApiV2Events, "GET "),
+		strings.TrimPrefix(httpcontract.RouteGetApiV2LogsStream, "GET "):
+		return true
+	}
+	return false
+}
+
 func (s *Server) connectionLimiter(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isSSERequest(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		s.mu.Lock()
 		if s.activeConns >= s.maxConns {
 			// 计数在锁内取值：解锁后再读 activeConns 会与其它连接的 ++/-- 竞争。

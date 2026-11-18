@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -62,5 +63,17 @@ func TestConnectionLimitReturnsEnvelope503(t *testing.T) {
 	}
 	if string(env.Data) != "null" {
 		t.Errorf("失败信封 data = %s，期望 null", env.Data)
+	}
+}
+func TestIsSSERequest(t *testing.T) {
+	for _, path := range []string{"/api/v2/events", "/api/v2/logs/stream"} {
+		if !isSSERequest(&http.Request{URL: &url.URL{Path: path}}) {
+			t.Errorf("%s 应识别为 SSE 请求", path)
+		}
+	}
+	for _, path := range []string{"/api/v2/bans", "/api/v2/events/extra"} {
+		if isSSERequest(&http.Request{URL: &url.URL{Path: path}}) {
+			t.Errorf("%s 不应识别为 SSE 请求", path)
+		}
 	}
 }

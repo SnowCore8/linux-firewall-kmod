@@ -157,6 +157,12 @@ type PumpDeps struct {
 	// 组合根用它把 trusted_ips 放到注册之后下发：注册前内核会丢弃一切指令。
 	OnLeaseClaimed func()
 
+	// OnBanConfirmed 在一条封禁被内核 BanStateChange 确认后调用（ip 已归一）。
+	// 组合根据此把底账从「下发前写入」改成「确认后写入」，避免内核拒绝时留下幽灵封禁。
+	OnBanConfirmed func(ip string)
+	// OnBanRejected 在内核 CmdResult 明确拒绝一条封禁后调用。
+	OnBanRejected func(ip string)
+
 	// 周期覆盖项：零值取上方常量，供测试缩短节拍。
 	Timeout           time.Duration
 	SampleEvery       time.Duration
@@ -194,6 +200,8 @@ type EventPump struct {
 	logger         *slog.Logger
 	directives     chan<- runtime.Directive
 	onLeaseClaimed func()
+	onBanConfirmed func(string)
+	onBanRejected  func(string)
 	leaseOnce      sync.Once
 
 	timeout        time.Duration
@@ -262,6 +270,8 @@ func NewEventPump(deps PumpDeps) (*EventPump, error) {
 		logger:         logger,
 		directives:     deps.Directives,
 		onLeaseClaimed: deps.OnLeaseClaimed,
+		onBanConfirmed: deps.OnBanConfirmed,
+		onBanRejected:  deps.OnBanRejected,
 		timeout:        orDefault(deps.Timeout, DefaultRequestTimeout),
 		sampleEvery:    orDefault(deps.SampleEvery, SampleInterval),
 		reconcileEvery: orDefault(deps.ReconcileEvery, ReconcileInterval),
@@ -417,6 +427,10 @@ func (p *EventPump) handleBan(ev *contract.BanStateChange) {
 		// 内核的确认到达：镜像按事件内容重建，待确认标记由 Upsert 一并撤销。
 		info := p.banInfoFromChange(ev, addr, now)
 		changed := p.cache.Upsert(info)
+		// 内核确认之后才把这笔封禁记进底账；拒绝路径（CmdResult）直接丢弃。
+		if p.onBanConfirmed != nil {
+			p.onBanConfirmed(ip)
+		}
 		p.ring.Push(telemetry.Event{
 			Kind:      telemetry.EventBan,
 			IP:        ip,
@@ -534,6 +548,9 @@ func (p *EventPump) handleCmdResult(ev *contract.CmdResult) {
 		if ip != "" {
 			if p.cache.Remove(ip) {
 				p.publishDomain(DomainBans, "封禁被内核拒绝")
+			}
+			if p.onBanRejected != nil {
+				p.onBanRejected(ip)
 			}
 		}
 		// 同时通知执行体：它才是发起下发的一方。条目从镜像里消失后，该 IP 的下一条失败
@@ -661,6 +678,11 @@ func (p *EventPump) reconcile() {
 			continue
 		}
 		seen[info.IP] = struct{}{}
+		// 对账以内核表为准，也能补上 BanStateChange 丢失的确认：底账登记表对
+		// procfs/内核自发封禁是空操作，对 daemon 下发未确认的条目才是补写。
+		if p.onBanConfirmed != nil {
+			p.onBanConfirmed(info.IP)
+		}
 		if p.cache.Upsert(info) {
 			changed = true
 		}

@@ -467,8 +467,9 @@ func run(args []string) error {
 	if httpAddr != "" {
 		var err error
 		httpServer, err = http.NewServer(http.Config{
-			Address:         httpAddr,
-			MaxConnections:  cfg.MaxSSEConnections,
+			Address: httpAddr,
+			// 全局连接配额只管普通 REST（默认 32）；两条 SSE 流各有自己的名额账本。
+			// 不再复用 cfg.MaxSSEConnections 当全局上限。
 			ShutdownTimeout: 5 * time.Second,
 			Logger:          logger,
 		})
@@ -482,12 +483,16 @@ func run(args []string) error {
 			logStream := http.NewLogsStream(logger)
 
 			api = http.NewAPIHandlers(http.APIConfig{
-				Server:    httpServer,
-				DB:        historyDB,
-				SSE:       sseBroker,
-				LogStream: logStream,
-				Metrics:   metrics,
-				KernelBan: banSinkForDaemon,
+				Server: httpServer,
+				DB:     historyDB,
+				// 手工封禁不走 banSink，底账写库失败由同一份重试队列兜底，写成功后要把
+				// 次数/信誉同步进判定层缓存。
+				Facts:      facts,
+				RetryQueue: retryQueue,
+				SSE:        sseBroker,
+				LogStream:  logStream,
+				Metrics:    metrics,
+				KernelBan:  banSinkForDaemon,
 				// 白名单下发出口：与封禁共用内核客户端，缺席时同样按「跳过下发」处理。
 				KernelWhitelist: whitelistSinkForDaemon,
 				// 配置下发出口：PUT /config 同步发一次，好把内核的采纳结论带回响应。
@@ -624,6 +629,9 @@ func run(args []string) error {
 					pushProtectedPorts(true)
 				}
 			},
+			// 底账延迟到内核确认之后：拒绝路径不再留下从未生效的封禁。
+			OnBanConfirmed: banSinkForDaemon.ConfirmBan,
+			OnBanRejected:  banSinkForDaemon.DiscardPending,
 		})
 		if err != nil {
 			logger.Error("内核事件泵装配失败，内核事件将无人消费", "error", err)
@@ -895,13 +903,18 @@ type banSink struct {
 	retryQueue *persist.RetryQueue
 	// noteBan 在封禁落库后将「刚刚封了一次」同步进信誉缓存（可空）。
 	noteBan func(netip.Addr)
+
+	// pending 保存「已下发、等内核 BanStateChange 确认」的底账；确认后才写库，
+	// 内核 CmdResult 拒绝时直接丢弃。
+	pendingMu sync.Mutex
+	pending   map[string]bans.BanInfo
 }
 
 func newBanSink(client *kernel.Client, logger *slog.Logger, db *persist.DB, rq *persist.RetryQueue) *banSink {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &banSink{client: client, cache: bans.GlobalCache(), logger: logger, db: db, retryQueue: rq}
+	return &banSink{client: client, cache: bans.GlobalCache(), logger: logger, db: db, retryQueue: rq, pending: make(map[string]bans.BanInfo)}
 }
 
 // InsertPending 见 runtime.BanSink：原子地占位并挂上「等待内核确认」标记。
@@ -919,14 +932,13 @@ func (s *banSink) InsertPending(info bans.BanInfo) bool {
 	if !s.cache.InsertPending(info, time.Now()) {
 		return false
 	}
-	s.recordBanLedger(info)
-	// 库里的封禁次数与信誉分都被本条底账改过了，判定层的缓存必须跟着走，否则它继续报告
-	// 封禁前的旧值（渐进式时长读的就是这个次数）。
-	if s.noteBan != nil {
-		if addr, err := netip.ParseAddr(info.IP); err == nil {
-			s.noteBan(addr)
-		}
+	key := canonicalBanKey(info.IP)
+	s.pendingMu.Lock()
+	if s.pending == nil {
+		s.pending = make(map[string]bans.BanInfo)
 	}
+	s.pending[key] = info
+	s.pendingMu.Unlock()
 	return true
 }
 
@@ -939,19 +951,30 @@ func (s *banSink) recordBanLedger(info bans.BanInfo) {
 		return
 	}
 	// 自动路径的等级取判定层的 info.BanCount（= 此前次数 + 1，渐进式时长就是按它算的），
-	// 底账里记同一个数，「这一级封多久」才对得上「这是第几封」。它与
-	// RecordBanHistory 返回的累计值是同一个数，这里不依赖后者是为了让写事件这一步
-	// 不被历史表的写入顺序牵着走。
-	if err := s.db.RecordBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent, info.PlannedDuration()); err != nil {
-		s.logger.Error("record ban event", "error", err)
-		if s.retryQueue != nil {
-			s.retryQueue.EnqueueBanEvent(info.IP, info.JailName, int(info.BanCount), info.IsPermanent, info.PlannedDuration())
+	// 底账里记同一个数，「这一级封多久」才对得上「这是第几封」。手工路径经确认回调
+	// 进来时 BanCount 为 0，序号只能取自历史表的累计值，故先写历史再用它。
+	banCount := int(info.BanCount)
+	if banCount <= 0 {
+		count, err := s.db.RecordBanHistory(info.IP, info.IsPermanent)
+		if err != nil {
+			s.logger.Error("record ban history", "error", err)
+			if s.retryQueue != nil {
+				s.retryQueue.EnqueueBanHistory(info.IP, info.IsPermanent)
+			}
+			banCount = 1
+		} else {
+			banCount = count
 		}
-	}
-	if _, err := s.db.RecordBanHistory(info.IP, info.IsPermanent); err != nil {
+	} else if _, err := s.db.RecordBanHistory(info.IP, info.IsPermanent); err != nil {
 		s.logger.Error("record ban history", "error", err)
 		if s.retryQueue != nil {
 			s.retryQueue.EnqueueBanHistory(info.IP, info.IsPermanent)
+		}
+	}
+	if err := s.db.RecordBanEvent(info.IP, info.JailName, banCount, info.IsPermanent, info.PlannedDuration()); err != nil {
+		s.logger.Error("record ban event", "error", err)
+		if s.retryQueue != nil {
+			s.retryQueue.EnqueueBanEvent(info.IP, info.JailName, banCount, info.IsPermanent, info.PlannedDuration())
 		}
 	}
 	if err := s.db.RecordBan(info.IP, persist.DefaultBanPenalty); err != nil {
@@ -994,6 +1017,46 @@ func (s *banSink) Remove(addr netip.Addr, prefixLen uint8) error {
 // RollbackInsert 见 runtime.BanSink。
 func (s *banSink) RollbackInsert(ip string) {
 	s.cache.Remove(ip)
+	s.DiscardPending(ip)
+}
+
+// ConfirmBan 在内核确认封禁后写底账与信誉缓存。
+//
+// 只有 InsertPending 登记的 IP 会命中：procfs/内核侧自发封禁没有登记，事件到达时
+// 这里是空操作；同一 IP 的重复 BanStateChange 也因登记已摘除而不会重复记账。
+func (s *banSink) ConfirmBan(ip string) {
+	key := canonicalBanKey(ip)
+	s.pendingMu.Lock()
+	info, ok := s.pending[key]
+	if ok {
+		delete(s.pending, key)
+	}
+	s.pendingMu.Unlock()
+	if !ok {
+		return
+	}
+	s.recordBanLedger(info)
+	if s.noteBan != nil {
+		if addr, err := netip.ParseAddr(info.IP); err == nil {
+			s.noteBan(addr)
+		}
+	}
+}
+
+// DiscardPending 在内核明确拒绝或同步下发失败时丢弃待确认底账。
+func (s *banSink) DiscardPending(ip string) {
+	key := canonicalBanKey(ip)
+	s.pendingMu.Lock()
+	delete(s.pending, key)
+	s.pendingMu.Unlock()
+}
+
+// canonicalBanKey 把地址文本归一成与缓存/内核事件一致的键。
+func canonicalBanKey(ip string) string {
+	if addr, err := netip.ParseAddr(ip); err == nil {
+		return bans.CanonicalIP(addr)
+	}
+	return ip
 }
 
 // whitelistSink 是 http.KernelWhitelist 的生产实现：白名单规则的内核下发出口。

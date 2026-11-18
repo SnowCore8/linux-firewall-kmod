@@ -32,6 +32,14 @@ type APIConfig struct {
 	Metrics   *Metrics
 	KernelBan KernelBan
 
+	// Facts 是判定层的信誉分/封禁次数缓存。手工封禁（POST /bans 与 /bans/batch）不经过
+	// runtime 的 banSink，写库后必须自己把「刚刚封了一次」同步进这份缓存；否则下一次自动
+	// 判定仍按封禁前的次数/分数算渐进时长与低信誉阈值。可空：DB 未装配时也是 nil。
+	Facts *persist.Facts
+	// RetryQueue 暂存写库瞬时失败的底账（history/event/reputation），由后台协程重试。
+	// 可空口径同 Facts。
+	RetryQueue *persist.RetryQueue
+
 	// KernelWhitelist 是白名单的下发出口（见 whitelist.go 的 KernelWhitelist）。
 	// 与 KernelBan 同为可空：为空时白名单只改镜像，与「内核客户端未装配」同一个口径。
 	KernelWhitelist KernelWhitelist
@@ -241,6 +249,8 @@ func (s *Server) RegisterRoutes(api *APIHandlers) {
 type APIHandlers struct {
 	server          *Server
 	db              *persist.DB
+	facts           *persist.Facts
+	retryQueue      *persist.RetryQueue
 	sse             *SSEBroker
 	logStream       *SSEStream
 	metrics         *Metrics
@@ -291,6 +301,8 @@ func NewAPIHandlers(cfg APIConfig) *APIHandlers {
 	return &APIHandlers{
 		server:            cfg.Server,
 		db:                cfg.DB,
+		facts:             cfg.Facts,
+		retryQueue:        cfg.RetryQueue,
 		sse:               cfg.SSE,
 		logStream:         cfg.LogStream,
 		metrics:           cfg.Metrics,
