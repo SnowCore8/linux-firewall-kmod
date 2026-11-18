@@ -183,6 +183,43 @@ func TestFeedCache_MappedIPv4EntriesMatch(t *testing.T) {
 	}
 }
 
+// TestFeedCache_MergeRejectsMappedWidePrefix 钉住缓存入口的第二道防线：
+// ::ffff:0.0.0.0/96 归一后是 0.0.0.0/0，不能因为调用方绕过源适配器就进索引，
+// 否则 Lookup 会把任意 IPv4 都判成情报命中。
+func TestFeedCache_MergeRejectsMappedWidePrefix(t *testing.T) {
+	now := time.Now()
+	cache := NewFeedCache()
+	cache.Merge([]FeedEntry{{
+		IP:         netip.MustParsePrefix("::ffff:0.0.0.0/96"),
+		Source:     "evil",
+		Category:   "abuse",
+		Confidence: 1.0,
+		ExpiresAt:  now.Add(24 * time.Hour),
+	}})
+
+	if _, ok := cache.Lookup(netip.MustParseAddr("8.8.8.8")); ok {
+		t.Fatal("映射 /96 被归一成 0.0.0.0/0，Lookup(8.8.8.8) 不应命中")
+	}
+	if _, ok := cache.Lookup(netip.MustParseAddr("203.0.113.9")); ok {
+		t.Fatal("映射 /96 不应命中任意 IPv4")
+	}
+	if size := cache.Size(); size != 0 {
+		t.Fatalf("坏条目不应进入缓存: Size=%d", size)
+	}
+
+	// 归一后长度合法的映射网段仍要接受，并继续用 v4 形态匹配。
+	cache.Merge([]FeedEntry{{
+		IP:         netip.MustParsePrefix("::ffff:8.8.8.0/120"),
+		Source:     "legit",
+		Category:   "abuse",
+		Confidence: 0.8,
+		ExpiresAt:  now.Add(24 * time.Hour),
+	}})
+	if _, ok := cache.Lookup(netip.MustParseAddr("8.8.8.8")); !ok {
+		t.Fatal("合法的映射 /24 应归一并在 Lookup 中命中")
+	}
+}
+
 func TestFeedCache_Expired(t *testing.T) {
 	cache := NewFeedCache()
 

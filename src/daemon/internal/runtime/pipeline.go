@@ -191,7 +191,7 @@ func (p *Pipeline) JailCount() int { return len(p.jails) }
 
 // RetainJails 只保留 keep 中列出的 jail，返回被摘除的数量。
 //
-// 重载后配置里已消失的 jail 连同其失败窗口一并回收。旧实现靠整体替换配置达到同样效果；
+// 重载后配置里已消失的 jail 连同其失败窗口与各源分割器一并回收。旧实现靠整体替换配置达到同样效果；
 // 本层状态与配置分离（配置在组合根、窗口在执行体），所以必须显式回收——否则长期运行中
 // 改过名的 jail 会一直留在表里。
 func (p *Pipeline) RetainJails(keep []string) int {
@@ -203,6 +203,13 @@ func (p *Pipeline) RetainJails(keep []string) int {
 	for jail := range p.jails {
 		if _, ok := keepSet[jail]; !ok {
 			delete(p.jails, jail)
+		}
+	}
+	// (jail, source) 分割器与 jail 同生命周期：只删 jail 表会让被摘除 jail 的半行
+	// 缓冲永远留在 splitter 表里，每次改名/重载都累积一份跑不到也删不掉的旧状态。
+	for key := range p.splitters {
+		if _, ok := keepSet[key.jail]; !ok {
+			delete(p.splitters, key)
 		}
 	}
 	return before - len(p.jails)

@@ -85,7 +85,11 @@ type factsEntry struct {
 	// dbScoreLoaded 标记是否已从 DB 读取过信誉分（与 scoreLoaded 分开，
 	// 让 NoteBan 能在 DB 读取前捕获"是否已加载"状态）。
 	dbScoreLoaded bool
-	pending       uint32
+	// dbScoreFallback 标记读库失败后已按满分回退过内存分。回退只应用一次，
+	// 反复应用会把之后累积的 pending 一起抹掉；dbScoreLoaded 仍保持 false，
+	// 后续调用继续重试读库。
+	dbScoreFallback bool
+	pending         uint32
 
 	bans       uint32
 	bansLoaded bool
@@ -318,8 +322,19 @@ func (f *Facts) loadScoreFromDB(e *factsEntry) {
 	rep, err := f.db.GetIPReputation(e.ip)
 	if err != nil {
 		f.logger.Warn("读取信誉分失败，按满分处理", "ip", e.ip, "error", err)
+		// 读库失败不能伪装成「已加载」：保持 dbScoreLoaded=false，后续调用继续重试。
+		// 内存分按库里没有该行（满分）处理，但只回退一次，避免每轮失败都把已扣的
+		// pending 重新抹掉。
 		f.mu.Lock()
-		e.dbScoreLoaded = true
+		if cur, ok := f.index[e.ip]; ok && cur.Value.(*factsEntry) == e &&
+			!e.dbScoreLoaded && !e.dbScoreFallback {
+			if e.pending > fullReputation {
+				e.score = 0
+			} else {
+				e.score = fullReputation - e.pending
+			}
+			e.dbScoreFallback = true
+		}
 		f.mu.Unlock()
 		return
 	}
@@ -368,9 +383,7 @@ func (f *Facts) loadBansFromDB(e *factsEntry) {
 	h, err := f.db.GetBanHistory(e.ip)
 	if err != nil {
 		f.logger.Warn("读取封禁历史失败，按零次处理", "ip", e.ip, "error", err)
-		f.mu.Lock()
-		e.dbBansLoaded = true
-		f.mu.Unlock()
+		// 同信誉分：失败不标记已加载，内存值保持当前值（未读过库时即 0），下次重试。
 		return
 	}
 	f.mu.Lock()

@@ -98,6 +98,55 @@ func TestReputationFloorIsZeroOnBothSides(t *testing.T) {
 	}
 }
 
+// TestDBReadFailureUsesFullReputationAndRetries 钉住读库失败的回退语义：内存分按
+// 「库里没有该行」的满分处理（再减未落盘 pending），但绝不能标记成已加载——否则 DB
+// 恢复后永远不再读，该 IP 的信誉分会停在错误值。封禁次数同理。
+func TestDBReadFailureUsesFullReputationAndRetries(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "facts-retry.db")
+	db, err := NewDB(Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("建测试库失败: %v", err)
+	}
+	f := NewFacts(db, FactsOptions{})
+	if err := db.Close(); err != nil {
+		t.Fatalf("关库失败: %v", err)
+	}
+
+	const ip = "1.2.3.4"
+	f.RecordFailure(addr(t, ip))
+	if got := f.ReputationScore(addr(t, ip)); got != 90 {
+		t.Fatalf("读库失败后分数 = %d，想要 90（满分 100 减一次失败 10）", got)
+	}
+	if got := f.PriorBanCount(addr(t, ip)); got != 0 {
+		t.Fatalf("读库失败时封禁次数应按 0 处理，实得 %d", got)
+	}
+
+	// DB 恢复：预置库内分数 60 与两次封禁历史，证明后续调用确实重新读了库。
+	db2, err := NewDB(Config{Path: dbPath})
+	if err != nil {
+		t.Fatalf("重开测试库失败: %v", err)
+	}
+	defer db2.Close()
+	if err := db2.SetIPReputation(ip, 60); err != nil {
+		t.Fatalf("预置信誉分失败: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := db2.RecordBanHistory(ip, false); err != nil {
+			t.Fatalf("预置封禁历史失败: %v", err)
+		}
+	}
+	f.db = db2
+
+	// pending 的 10 分尚未落盘，重读库分后先减 pending，再扣本次失败的 10 分。
+	f.RecordFailure(addr(t, ip))
+	if got := f.ReputationScore(addr(t, ip)); got != 40 {
+		t.Fatalf("恢复后重读库的分数 = %d，想要 40（库 60 - pending 10 - 本次 10）", got)
+	}
+	if got := f.PriorBanCount(addr(t, ip)); got != 2 {
+		t.Fatalf("恢复后封禁次数 = %d，想要 2（读库失败后应允许重读）", got)
+	}
+}
+
 // ::ffff:a.b.c.d 与 a.b.c.d 必须是同一条目：判定层与下发侧给出的写法不同，各存一份就
 // 会有两个互不相见的信誉分。
 func TestIPv4MappedSharesOneEntry(t *testing.T) {

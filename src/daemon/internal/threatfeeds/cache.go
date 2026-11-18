@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/threatfeeds/sources"
 )
 
 // MaxCacheEntries 是缓存条目上限，防止恶意/错误配置的源导致内存耗尽。
@@ -63,6 +65,9 @@ func NewFeedCache() *FeedCache {
 // 情报源偶尔用 `::ffff:a.b.c.d` 写 IPv4。Lookup 会把查询地址 Unmap 成 IPv4，
 // 若不在这里归一，这类条目的键是 v6 形态、前缀桶长度是 120 以上，永远不会命中。
 func canonicalPrefix(p netip.Prefix) netip.Prefix {
+	if !p.IsValid() {
+		return netip.Prefix{}
+	}
 	p = p.Masked()
 	addr := p.Addr()
 	if !addr.Is4In6() {
@@ -70,7 +75,9 @@ func canonicalPrefix(p netip.Prefix) netip.Prefix {
 	}
 	bits := p.Bits() - 96
 	if bits < 0 {
-		bits = 0
+		// 映射前缀短于 /96，归约不出任何 IPv4 网段。绝不能钳成 /0：那样一条
+		// ::ffff:0.0.0.0/96 就会变成 0.0.0.0/0 并命中任意 IPv4。
+		return netip.Prefix{}
 	}
 	return netip.PrefixFrom(addr.Unmap(), bits)
 }
@@ -139,6 +146,11 @@ func (c *FeedCache) Merge(newEntries []FeedEntry) {
 	newCIDR := make(map[uint8]map[string]*FeedEntry)
 	for i := range newEntries {
 		e := &newEntries[i]
+		// 缓存入口是第二道防线：绕过源适配器直接 Merge 的未指定/过宽网段
+		// （尤其 ::ffff:0.0.0.0/96 归一后是 0.0.0.0/0）一律不入索引。
+		if !sources.IsUsablePrefix(e.IP) {
+			continue
+		}
 		key, isCIDR, bits := entryKey(e.IP)
 		if existing, ok := merged[key]; ok {
 			if e.Confidence > existing.Confidence {

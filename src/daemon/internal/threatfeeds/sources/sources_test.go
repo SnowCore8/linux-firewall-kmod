@@ -264,6 +264,46 @@ func TestParseIPListPrefixLimits(t *testing.T) {
 	}
 }
 
+// TestParseFeedEntryMappedIPv4Prefixes 钉住映射前缀的归一时机：必须先 Unmap 再判
+// 未指定与 IPv4 长度下限。::ffff:0.0.0.0/96 的地址本身不是未指定地址，去掉映射前缀
+// 后却是 0.0.0.0/0；只要它被接受，缓存就会把任意 IPv4 命中成情报源。
+func TestParseFeedEntryMappedIPv4Prefixes(t *testing.T) {
+	expiresAt := time.Now().Add(time.Hour)
+	tests := []struct {
+		entry    string
+		usable   bool
+		wantNorm string
+	}{
+		{"::ffff:0.0.0.0/96", false, ""},
+		{"::ffff:0.0.0.0/104", false, ""},  // 归一为 0.0.0.0/8
+		{"::ffff:1.2.3.4/96", false, ""},   // 归一为 0.0.0.0/0
+		{"::ffff:8.8.8.8/102", false, ""},  // 归一为 8.8.8.8/6
+		{"::ffff:10.0.0.0/103", false, ""}, // 归一为 10.0.0.0/7
+		{"::ffff:8.8.8.8/120", true, "8.8.8.8/24"},
+		{"::ffff:198.51.100.7/128", true, "198.51.100.7/32"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.entry, func(t *testing.T) {
+			entry, ok, rejected := parseFeedEntry(tt.entry, "test", "abuse", 0.8, expiresAt)
+			if ok != tt.usable {
+				t.Fatalf("可用 = %v，想要 %v（rejected=%v）", ok, tt.usable, rejected)
+			}
+			if !tt.usable {
+				if !rejected {
+					t.Fatal("语法合法的坏前缀必须计入 rejected，而不是静默丢弃")
+				}
+				return
+			}
+			if rejected {
+				t.Fatal("合法映射前缀不应计入 rejected")
+			}
+			if got := entry.IP.String(); got != tt.wantNorm {
+				t.Fatalf("归一后的前缀 = %s，想要 %s", got, tt.wantNorm)
+			}
+		})
+	}
+}
+
 // TestSourcesRejectUnsuitablePrefixes 核对五个源适配器都走同一前缀校验：
 // 0.0.0.0/0 与 ::/0 被丢弃，同批 /24 与 /48 照常保留。
 func TestSourcesRejectUnsuitablePrefixes(t *testing.T) {

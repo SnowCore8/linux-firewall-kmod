@@ -53,6 +53,9 @@ type RetryQueueConfig struct {
 	// PersistInterval 是把脏队列合并落盘的节拍；<=0 时取 300ms。
 	// 入队只置脏标记，落盘由该节拍合并，避免后端持续失败时每次入队都全量写盘。
 	PersistInterval time.Duration
+	// StopFlushTimeout 是 Stop 里最后一次 flush 的时间预算；<=0 时取 5s。
+	// 关停不能被不可用的 DB 无限拖住，队列剩余任务仍有持久化文件兜底。
+	StopFlushTimeout time.Duration
 }
 
 // RetryQueue 把失败的数据库写入放入有界内存队列，由后台协程按指数退避重试。
@@ -85,6 +88,15 @@ type RetryQueue struct {
 	nextID      uint64
 	persistSeq  uint64
 
+	// ctx 是批次执行上下文：Stop 取消它，让正在跑的 retryBatch 在每条任务前退出，
+	// 而不是把整条队列重试完；正常运行期间不会被取消。
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// executeFn 是单条任务的执行入口，nil 时用 q.execute。测试注入阻塞实现来验证
+	// Stop 的批次取消路径。
+	executeFn func(context.Context, retryTask) error
+
 	// wakeCount 是测试用观测点：统计 notify 被调用的次数。
 	wakeCount atomic.Uint64
 }
@@ -105,9 +117,13 @@ func NewRetryQueue(db *DB, cfg RetryQueueConfig) *RetryQueue {
 	if cfg.PersistInterval <= 0 {
 		cfg.PersistInterval = 300 * time.Millisecond
 	}
+	if cfg.StopFlushTimeout <= 0 {
+		cfg.StopFlushTimeout = 5 * time.Second
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	q := &RetryQueue{
 		cfg:         cfg,
 		db:          db,
@@ -117,6 +133,8 @@ func NewRetryQueue(db *DB, cfg RetryQueueConfig) *RetryQueue {
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 		persistDone: make(chan struct{}),
+		ctx:         ctx,
+		cancel:      cancel,
 	}
 	go q.run()
 	go q.persistLoop()
@@ -181,7 +199,12 @@ func (q *RetryQueue) Len() int {
 // 可重复调用：关停路径上「显式调用」与「defer 兜底」并存时，第二次调用不能 panic
 // （close of closed channel），也不能重复等待一个已结束的协程。
 func (q *RetryQueue) Stop() {
-	q.stopOnce.Do(func() { close(q.stop) })
+	q.stopOnce.Do(func() {
+		close(q.stop)
+		// 取消批次执行：run 里正在跑的 retryBatch 会在下一条任务前退出，
+		// 不会因为队列里积压了很多条而把关停拖成「任务数 × 单次 DB 超时」。
+		q.cancel()
+	})
 	<-q.done
 	<-q.persistDone
 	// 节拍协程已退出：置 stopped 让后续 Enqueue 自己落盘，再强制落盘一次，
@@ -189,8 +212,11 @@ func (q *RetryQueue) Stop() {
 	q.mu.Lock()
 	q.stopped = true
 	q.mu.Unlock()
-	// 最后一次 flush：尝试把队列中剩余的任务写入 DB。
-	q.flush(context.Background())
+	// 最后一次 flush 有明确时间上界：DB 不可用时不能无限拖住关停，
+	// 剩余任务由随后的 persist 写入持久化文件。
+	ctx, cancel := context.WithTimeout(context.Background(), q.cfg.StopFlushTimeout)
+	defer cancel()
+	q.flush(ctx)
 	q.persist()
 }
 
@@ -225,7 +251,7 @@ func (q *RetryQueue) run() {
 		case <-timer.C:
 			// 定时重试。
 		}
-		retried, failed := q.retryBatch()
+		retried, failed := q.retryBatch(q.ctx)
 		if retried > 0 {
 			q.log.Info("retry queue batch", "succeeded", retried, "failed", failed)
 		}
@@ -274,7 +300,7 @@ func (q *RetryQueue) backoff(consecutive int) time.Duration {
 //
 // 成功执行的任务从队列中移除；失败的任务保留在队列中等待下次重试。
 // 通过递增 id 区分 batch 拷贝期间新入队的任务，避免并发替换导致丢失。
-func (q *RetryQueue) retryBatch() (succeeded, failed int) {
+func (q *RetryQueue) retryBatch(ctx context.Context) (succeeded, failed int) {
 	q.mu.Lock()
 	if len(q.tasks) == 0 {
 		q.mu.Unlock()
@@ -290,8 +316,18 @@ func (q *RetryQueue) retryBatch() (succeeded, failed int) {
 
 	var remaining []retryTask
 	dropped := 0
-	for _, task := range batch {
-		if err := q.execute(task); err != nil {
+	execute := q.execute
+	if q.executeFn != nil {
+		execute = func(task retryTask) error { return q.executeFn(ctx, task) }
+	}
+	for i, task := range batch {
+		if ctx.Err() != nil {
+			// 已取消：剩余任务原样留在队列里（不计失败，避免冲击退避），
+			// 由调用方决定是否在时间预算内继续下一批。
+			remaining = append(remaining, batch[i:]...)
+			break
+		}
+		if err := execute(task); err != nil {
 			if errors.Is(err, errRetryTaskPermanent) {
 				// 未知 op 永远不可能成功：丢弃并记一条错误日志，不让它拖住整条队列。
 				q.log.Error("retry queue: dropping task that can never succeed",
@@ -364,7 +400,7 @@ func (q *RetryQueue) flush(ctx context.Context) {
 		q.mu.Lock()
 		before := len(q.tasks)
 		q.mu.Unlock()
-		retried, failed := q.retryBatch()
+		retried, failed := q.retryBatch(ctx)
 		if retried == 0 && failed == 0 {
 			return
 		}

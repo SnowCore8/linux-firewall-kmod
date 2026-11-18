@@ -358,6 +358,10 @@ func TestRetainJailsDropsTheOnesNoLongerConfigured(t *testing.T) {
 	if got := p.Counters().LinesParsed; got != 2 {
 		t.Errorf("摘除不得回退计数: LinesParsed=%d, want 2", got)
 	}
+	// web 的分割器必须随 jail 一起删掉；只删 jail 表会让旧源的半行缓冲滞留。
+	if got := p.PendingSources(); got != 1 {
+		t.Errorf("摘除 jails 后应只剩 sshd 的分割器: PendingSources=%d, want 1", got)
+	}
 
 	// 保留集合为空时全部摘除。
 	if got := p.RetainJails(nil); got != 1 {
@@ -365,6 +369,9 @@ func TestRetainJailsDropsTheOnesNoLongerConfigured(t *testing.T) {
 	}
 	if got := p.JailCount(); got != 0 {
 		t.Errorf("JailCount=%d, want 0", got)
+	}
+	if got := p.PendingSources(); got != 0 {
+		t.Errorf("全部摘除后不应残留分割器: PendingSources=%d, want 0", got)
 	}
 }
 

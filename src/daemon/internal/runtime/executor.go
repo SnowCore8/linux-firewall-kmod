@@ -675,10 +675,16 @@ func (e *InboundExecutor) drainSource(id ingest.SourceID) {
 		reader.Reset()
 		return
 	}
+	// 轮转 / 截断：整源只清一次半行缓冲，且必须在逐 jail 分发之前。
+	// 若交给 feed 按 jail 调用，第二个 jail 会清掉第一个 jail 刚喂入本批字节后挂起的
+	// 尾部半行——共享同一文件的 jail 里除最后一个外都会丢行。
+	if chunk.Rotated {
+		e.pipeline.OnSourceRotated(id)
+	}
 	// 把日志分发给所有共享此文件的 jail。全局计数只取第一个 jail 的差值，按源只累加
 	// 一次；jail 级计数各自累加。
 	for i, jail := range jails {
-		e.feed(jail, id, chunk.Bytes, chunk.Rotated, i == 0)
+		e.feed(jail, id, chunk.Bytes, i == 0)
 	}
 }
 
@@ -686,11 +692,10 @@ func (e *InboundExecutor) drainSource(id ingest.SourceID) {
 //
 // global 为真表示本批字节的计数差值同时计入全局口径；共享源的同一批字节只在第一个
 // jail 上置真，全局行数/正则/IP 计数因此按源各只增一次。
-func (e *InboundExecutor) feed(jail string, id ingest.SourceID, bytes []byte, rotated, global bool) {
-	if rotated {
-		// 轮转 / 截断：旧文件的半行不得与新文件的开头拼接。
-		e.pipeline.OnSourceRotated(id)
-	}
+//
+// 轮转/截断的半行清理由调用方在逐 jail 分发之前整源做一次（见 drainSource），
+// 不能放在这里按 jail 重复执行。
+func (e *InboundExecutor) feed(jail string, id ingest.SourceID, bytes []byte, global bool) {
 	if len(bytes) == 0 {
 		return
 	}
@@ -811,7 +816,7 @@ func (e *InboundExecutor) handleRotation(id ingest.SourceID, path string) {
 	if reader := e.readers[id]; reader != nil {
 		if tail := reader.DrainTail(rotationDrainBatches); len(tail) > 0 {
 			for i, jail := range jails {
-				e.feed(jail, id, tail, false, i == 0)
+				e.feed(jail, id, tail, i == 0)
 			}
 		}
 	}

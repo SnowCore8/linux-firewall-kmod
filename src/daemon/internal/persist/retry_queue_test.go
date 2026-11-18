@@ -2,6 +2,7 @@ package persist
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -325,6 +326,73 @@ func TestRetryQueueStopPersistsWhenDBUnavailable(t *testing.T) {
 	}
 	if len(tasks) != 1 || tasks[0].IP != "203.0.113.77" {
 		t.Fatalf("Stop 后应从磁盘恢复 1 条任务，实际 %+v", tasks)
+	}
+}
+
+// TestRetryQueueStopIsBoundedWhenExecuteBlocks 钉住关停上界：执行器卡住时 Stop 不能
+// 逐条等完整个队列。取消批次让 run 在第一条任务后退出，最后一次 flush 再受
+// StopFlushTimeout 约束；剩余任务必须留在队列并写入持久化文件。
+func TestRetryQueueStopIsBoundedWhenExecuteBlocks(t *testing.T) {
+	dir := t.TempDir()
+	db := newTestDB(t) // executeFn 替换后不会真的访问 DB。
+	q := NewRetryQueue(db, RetryQueueConfig{
+		MaxSize:          100,
+		PersistPath:      filepath.Join(dir, "retry.json"),
+		Logger:           retryTestLogger(),
+		RetryInterval:    time.Hour,
+		MaxRetryInterval: time.Hour,
+		PersistInterval:  time.Hour,
+		StopFlushTimeout: 100 * time.Millisecond,
+	})
+
+	started := make(chan struct{}, 1)
+	q.executeFn = func(ctx context.Context, task retryTask) error {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	const tasks = 50
+	for i := 0; i < tasks; i++ {
+		q.EnqueueBanHistory(fmt.Sprintf("198.51.100.%d", i), false)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("后台批次未开始执行")
+	}
+
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		q.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop 超过固定上界仍未返回")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Stop 耗时 %v，超过固定上界（flush 预算 100ms）", elapsed)
+	}
+
+	if got := q.Len(); got != tasks {
+		t.Fatalf("取消后的任务不应被当成已消费: 剩余 %d，想要 %d", got, tasks)
+	}
+	data, err := os.ReadFile(q.cfg.PersistPath)
+	if err != nil {
+		t.Fatalf("Stop 后持久化文件缺失: %v", err)
+	}
+	var persisted []retryTask
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("解析持久化文件失败: %v", err)
+	}
+	if len(persisted) != tasks {
+		t.Fatalf("持久化任务数 = %d，想要 %d", len(persisted), tasks)
 	}
 }
 

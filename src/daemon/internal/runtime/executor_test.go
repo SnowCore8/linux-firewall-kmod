@@ -537,6 +537,100 @@ func TestRotationKeepsAllSharedJailOwners(t *testing.T) {
 	}
 }
 
+// TestSharedSourceTruncationKeepsEveryJailsPendingTail 钉住共享源截断轮转的清理顺序：
+// 半行缓冲只能在整源分发之前清一次。按 jail 重复清理会删掉前一个 jail 刚吃进本批
+// 字节、尚未成行的尾部，共享同一文件的 jail 里只有最后一个能补全它。
+func TestSharedSourceTruncationKeepsEveryJailsPendingTail(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	log := filepath.Join(dir, "shared-trunc.log")
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatalf("写日志失败: %v", err)
+	}
+
+	ex := sharedFixture(t, sharedJailConfig(t, log, "trunc-a", "trunc-b"), &fakeStats{}, nil)
+	defer ex.Close()
+
+	id, _, _, ok := ex.entryForPath(log)
+	if !ok {
+		t.Fatal("应已登记该日志源")
+	}
+
+	// 两个 jail 都先挂一段旧文件的半行；够长以保证 copytruncate 后的新内容更短，
+	// 同 inode 的 size 缩小能触发 Rotated=true。
+	oldTail := strings.Repeat("old-pending-", 32)
+	appendFile(t, log, []byte(oldTail))
+	ex.drainSource(id)
+	if got := ex.pipeline.Counters().IPsExtracted; got != 0 {
+		t.Fatalf("旧半行不应提取出 IP: %d", got)
+	}
+
+	// copytruncate：同 inode 截断后写回新内容，末尾故意不带换行。
+	newChunk := failedRec("203.0.113.101") + "Failed password for root from 198.51.100."
+	if len(newChunk) >= len(oldTail) {
+		t.Fatalf("新内容长度 %d 必须小于旧偏移 %d 才能触发截断检测", len(newChunk), len(oldTail))
+	}
+	if err := os.WriteFile(log, []byte(newChunk), 0o644); err != nil {
+		t.Fatalf("截断重写失败: %v", err)
+	}
+	ex.drainSource(id)
+	if got := ex.pipeline.Counters().IPsExtracted; got != 2 {
+		t.Fatalf("轮转批次的完整行应被两个 jail 各解析一次: IPsExtracted=%d，想要 2", got)
+	}
+
+	// 新批次末尾的半行续上换行：两个 jail 都必须补全。按 jail 重复清轮转会丢前一个。
+	appendFile(t, log, []byte("77 port 22\n"))
+	ex.drainSource(id)
+	if got := ex.pipeline.Counters().IPsExtracted; got != 4 {
+		t.Fatalf("轮转批次的尾部半行应被两个 jail 都补全: IPsExtracted=%d，想要 4", got)
+	}
+}
+
+// TestSharedSourceInodeRotationKeepsEveryJailsPendingTail 覆盖 inode 变化（改名 +
+// 新建同名文件）的轮转：与截断路径同样只在整源分发前清一次半行缓冲，两个 jail 的
+// 新批次尾部都不得被另一个 jail 的轮转清理连带删掉。
+func TestSharedSourceInodeRotationKeepsEveryJailsPendingTail(t *testing.T) {
+	dir := tempLogDir(t)
+	defer os.RemoveAll(dir)
+	log := filepath.Join(dir, "shared-rename.log")
+	if err := os.WriteFile(log, nil, 0o644); err != nil {
+		t.Fatalf("写日志失败: %v", err)
+	}
+
+	ex := sharedFixture(t, sharedJailConfig(t, log, "rename-a", "rename-b"), &fakeStats{}, nil)
+	defer ex.Close()
+
+	id, _, _, ok := ex.entryForPath(log)
+	if !ok {
+		t.Fatal("应已登记该日志源")
+	}
+
+	appendFile(t, log, []byte("old-pending-line"))
+	ex.drainSource(id)
+	if got := ex.pipeline.Counters().IPsExtracted; got != 0 {
+		t.Fatalf("旧半行不应提取出 IP: %d", got)
+	}
+
+	// logrotate 风格：先改名，再新建同名文件（新 inode），新文件末尾故意不带换行。
+	if err := os.Rename(log, log+".1"); err != nil {
+		t.Fatalf("改名失败: %v", err)
+	}
+	newChunk := failedRec("203.0.113.111") + "Failed password for root from 198.51.100."
+	if err := os.WriteFile(log, []byte(newChunk), 0o644); err != nil {
+		t.Fatalf("建新文件失败: %v", err)
+	}
+	ex.drainSource(id)
+	if got := ex.pipeline.Counters().IPsExtracted; got != 2 {
+		t.Fatalf("新文件的完整行应被两个 jail 各解析一次: IPsExtracted=%d，想要 2", got)
+	}
+
+	appendFile(t, log, []byte("88 port 22\n"))
+	ex.drainSource(id)
+	if got := ex.pipeline.Counters().IPsExtracted; got != 4 {
+		t.Fatalf("轮转批次的尾部半行应被两个 jail 都补全: IPsExtracted=%d，想要 4", got)
+	}
+}
+
 // sharedJailConfig 构造多个 jail 共享同一日志文件的最小配置。
 func sharedJailConfig(t *testing.T, log string, names ...string) *config.Config {
 	t.Helper()

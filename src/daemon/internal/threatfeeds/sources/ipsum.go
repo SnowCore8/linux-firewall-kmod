@@ -70,12 +70,47 @@ const (
 	minIPv6PrefixBits = 16
 )
 
+// normalizePrefix 把 IPv4-mapped IPv6 前缀归一成 IPv4 前缀。
+//
+// 归一必须发生在长度与未指定判断之前：`::ffff:0.0.0.0/96` 的地址本身不是
+// 未指定地址，但去掉映射前缀后就是 0.0.0.0/0；若不先 Unmap，它能以 /96 通过
+// IPv6 长度下限，缓存再把它归一成 0.0.0.0/0 命中任意 IPv4。
+//
+// ok=false 表示前缀无效，或映射长度不足 /96（无法对应任何 IPv4 网段）。
+func normalizePrefix(prefix netip.Prefix) (netip.Prefix, bool) {
+	if !prefix.IsValid() {
+		return netip.Prefix{}, false
+	}
+	if !prefix.Addr().Is4In6() {
+		return prefix, true
+	}
+	bits := prefix.Bits() - 96
+	if bits < 0 {
+		return netip.Prefix{}, false
+	}
+	out := netip.PrefixFrom(prefix.Addr().Unmap(), bits)
+	if !out.IsValid() {
+		return netip.Prefix{}, false
+	}
+	return out, true
+}
+
+// IsUsablePrefix 报告前缀是否符合情报条目规则：归一成 IPv4 后至少 /8、IPv6 至少
+// /16，且掩码后不是未指定网段。
+//
+// 缓存入口（threatfeeds/cache.go 的 Merge）也调用它做第二道防线，避免绕过适配器
+// 直接写入的坏网段进入索引。
+func IsUsablePrefix(prefix netip.Prefix) bool {
+	return isUsablePrefix(prefix)
+}
+
 // isUsablePrefix 判断前缀是否足够窄、且不是未指定地址网段。
 //
-// 未指定地址按掩码后判断，0.0.0.0/x 与 ::/x 的任何长度都算未指定，避免一条
+// 未指定地址按归一 + 掩码后判断，0.0.0.0/x 与 ::/x 的任何长度都算未指定，避免一条
 // 0.0.0.0/8 借「长度合规」命中 0.0.0.0/8 内的所有地址。
 func isUsablePrefix(prefix netip.Prefix) bool {
-	if !prefix.IsValid() {
+	prefix, ok := normalizePrefix(prefix)
+	if !ok {
 		return false
 	}
 	if prefix.Addr().IsUnspecified() || prefix.Masked().Addr().IsUnspecified() {
@@ -107,8 +142,11 @@ func parseFeedEntry(text, source, category string, confidence float64, expiresAt
 	if !isUsablePrefix(prefix) {
 		return FeedEntry{}, false, true
 	}
+	// 映射写法在入口就归一成 v4 形态，条目与缓存键、Lookup 的地址族保持一致。
+	// isUsablePrefix 已确认可归一，这里的 ok 必为 true。
+	normalized, _ := normalizePrefix(prefix)
 	return FeedEntry{
-		IP:         prefix,
+		IP:         normalized,
 		Source:     source,
 		Category:   category,
 		Confidence: confidence,
