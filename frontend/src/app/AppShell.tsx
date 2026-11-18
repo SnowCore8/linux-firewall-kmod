@@ -95,11 +95,12 @@ export default function AppShell() {
   const isMobile = useIsBelow('md')
   const isNarrow = useIsBelow('lg')
   const [collapsedPref, setCollapsedPref] = usePersistentState<boolean>('firewall.sider.collapsed', false)
+  // 窄屏默认折叠（图标条），但折叠按钮必须能把它展开；不能把 isNarrow 焊进 collapsed。
+  const [narrowExpanded, setNarrowExpanded] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
 
-  // 窄屏强制折叠（图标条），宽屏用用户偏好
-  const collapsed = isNarrow ? true : collapsedPref
+  const collapsed = isNarrow ? !narrowExpanded : collapsedPref
 
   useHotkey('mod+k', () => setPaletteOpen(true))
   useHotkey('mod+j', () => toggleMode())
@@ -175,14 +176,14 @@ export default function AppShell() {
 
   const onMenuClick: MenuProps['onClick'] = ({ key }) => navigate(key)
 
-  const siderMenu = (
+  const renderSiderMenu = (collapsedMode: boolean) => (
     <Menu
       mode="inline"
       theme={isDark ? 'dark' : 'light'}
       selectedKeys={[selectedKey]}
       items={menuItems}
       onClick={onMenuClick}
-      inlineCollapsed={collapsed}
+      inlineCollapsed={collapsedMode}
       style={{ borderInlineEnd: 'none', background: 'transparent' }}
     />
   )
@@ -196,7 +197,10 @@ export default function AppShell() {
       <Button
         type="text"
         icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-        onClick={() => setCollapsedPref((c) => !c)}
+        onClick={() => {
+          if (isNarrow) setNarrowExpanded((v) => !v)
+          else setCollapsedPref((c) => !c)
+        }}
         aria-label={collapsed ? '展开侧边栏' : '折叠侧边栏'}
       />
     </Tooltip>
@@ -215,7 +219,7 @@ export default function AppShell() {
         >
           <Flex vertical style={{ height: '100%' }}>
             <BrandMark collapsed={collapsed} />
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{siderMenu}</div>
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{renderSiderMenu(collapsed)}</div>
             {!collapsed && (
               <div
                 style={{
@@ -250,7 +254,7 @@ export default function AppShell() {
           styles={{ body: { padding: 0 } }}
         >
           <BrandMark collapsed={false} />
-          {siderMenu}
+          {renderSiderMenu(false)}
         </Drawer>
       )}
 
