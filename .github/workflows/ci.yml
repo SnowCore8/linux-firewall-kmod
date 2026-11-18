@@ -557,6 +557,18 @@ jobs:
               -k "daemon or logparse or frp or ddos or webui or config_reload or log_rotation or netlink or lifecycle or multi_jail or cluster_scan or auth_lockout or concurrent_reload_bans"
           fi
 
+      - name: 失败时保留现场
+        if: failure()
+        run: |
+          # 集成用例把守护进程日志写进它自己的 log_file（默认 /var/log/firewall.log），
+          # pytest 断言文本里看不到判定依据。失败时把封禁表与判定日志打出来再落报告。
+          echo "=== /proc/firewall/bans ==="
+          sudo cat /proc/firewall/bans 2>/dev/null | head -100 || echo "（不存在：模块未加载）"
+          echo "=== 守护进程日志尾部 ==="
+          sudo tail -n 200 /var/log/firewall.log 2>/dev/null || echo "（不存在）"
+          echo "=== dmesg（firewall 相关） ==="
+          sudo dmesg 2>/dev/null | grep -i firewall | tail -n 30 || true
+
       - name: 上传测试报告
         if: always()
         uses: actions/upload-artifact@v6
