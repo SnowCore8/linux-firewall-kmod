@@ -9,7 +9,13 @@ import pytest
 import yaml
 
 from .config import DAEMON_PATH
-from .conftest import get_prometheus_metrics, mark_daemon_launched, parse_metric
+from .conftest import (
+    free_tcp_port,
+    get_prometheus_metrics,
+    mark_daemon_launched,
+    parse_metric,
+    wait_for_daemon_http,
+)
 
 
 class TestMultiJail:
@@ -30,10 +36,11 @@ class TestMultiJail:
         log2.write_text("")
         log3.write_text("")
 
+        metrics_port = free_tcp_port()
         config = {
             "defaults": {
                 "max_retries": 3, "findtime": 600, "ban_time": 300,
-                "interval": 1, "metrics_port": 9122,
+                "interval": 1, "metrics_port": metrics_port,
             },
             "jails": {
                 "jail-alpha": {
@@ -66,14 +73,17 @@ class TestMultiJail:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        time.sleep(2)
+        # 等 HTTP 可读：daemon 先装配 ingest 再启动 HTTP，端点可读后追加的行不会被
+        # OpenAtEnd 的末尾定位吃掉。
+        if not wait_for_daemon_http(metrics_port):
+            pytest.fail("多 Jail daemon 的 /metrics 未在 10s 内就绪")
 
         yield {
             "proc": proc,
             "log1": log1,
             "log2": log2,
             "log3": log3,
-            "metrics_port": 9122,
+            "metrics_port": metrics_port,
         }
 
         if proc.poll() is None:
@@ -130,10 +140,9 @@ class TestMultiJail:
         metrics = get_prometheus_metrics(metrics_port)
         if not metrics:
             pytest.skip(f"Prometheus 端点不可达 (端口 {metrics_port})")
-        assert any(
-            line.startswith("firewall_lines_parsed_total ")
-            for line in metrics.splitlines()
-        ), "指标端点未暴露 firewall_lines_parsed_total 样本行"
+        assert parse_metric(metrics, "firewall_lines_parsed_total") > 0, (
+            "指标端点未暴露 firewall_lines_parsed_total 正样本"
+        )
 
     def test_cleanup(self, multi_jail_setup):
         """21.4 清理"""

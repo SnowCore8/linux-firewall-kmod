@@ -22,7 +22,12 @@ import pytest
 import yaml
 
 from .config import DAEMON_PATH
-from .conftest import MAX_RETRIES_CEILING, free_tcp_port, mark_daemon_launched
+from .conftest import (
+    MAX_RETRIES_CEILING,
+    free_tcp_port,
+    mark_daemon_launched,
+    wait_for_daemon_http,
+)
 
 # 触发封禁的失败行：单个 IP 只出现一次，故单 IP 阈值不可能被触及。
 CLUSTER_PATTERN = r"probe from (?P<ip>\d+\.\d+\.\d+\.\d+)"
@@ -66,6 +71,7 @@ class TestClusterScan:
         log = tmp_path / "cluster.log"
         log.write_text("")
 
+        metrics_port = free_tcp_port()
         config = {
             # 情报源默认开启，名单覆盖本用例使用的文档网段；命中即直封，会短路集群判据。
             # 这里关掉它，让封禁只能来自集群判定。
@@ -75,7 +81,7 @@ class TestClusterScan:
                 "findtime": 600,
                 "ban_time": 300,
                 "interval": 1,
-                "metrics_port": free_tcp_port(),
+                "metrics_port": metrics_port,
             },
             "jails": {
                 "probe": {
@@ -105,7 +111,8 @@ class TestClusterScan:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        time.sleep(2)
+        if not wait_for_daemon_http(metrics_port):
+            pytest.fail("集群用例 daemon 的 /metrics 未在 10s 内就绪")
 
         yield {"proc": proc, "log": log}
 

@@ -356,27 +356,28 @@ def daemon_starts_ok(cmd: list[str]) -> tuple[bool, int]:
 
 
 def run_daemon_then_append_log(
-    cmd: list[str], log_path: str, content: str, startup_wait: float = 3.0, ban_wait: float = 8.0
+    cmd: list[str], log_path: str, content: str, startup_wait: float = 1.0, ban_wait: float = 12.0
 ) -> int:
-    """启动 daemon，等它把日志定位到末尾后再追加新行，返回观察期结束时的封禁数。
+    """启动 daemon，在观察期内反复追加新行，直到出现封禁或超时。
 
     SourceReader.OpenAtEnd 在启动时把偏移定位到文件末尾（历史内容不回放），因此
-    「先写日志再起 daemon」的用例永远看不到新行；必须在 daemon 起来之后追加。
+    「先写日志再起 daemon」的用例永远看不到新行。慢环境里 daemon 完成装载的时间
+    不确定，单次追加可能落在它定位之前；重复追加让「定位完成后的第一行」一定能被读到。
     """
     mark_daemon_launched()
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         time.sleep(startup_wait)
-        with open(log_path, "a", encoding="utf-8") as handle:
-            handle.write(content)
-            handle.flush()
         deadline = time.monotonic() + ban_wait
         count = 0
         while time.monotonic() < deadline:
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+            time.sleep(0.6)
             count = count_bans()
             if count > 0:
                 break
-            time.sleep(0.2)
         return count
     finally:
         terminate_process(proc)
@@ -510,6 +511,21 @@ def parse_metric(metrics: str, name: str) -> float:
         if line.startswith(f"{name} "):
             return float(line.split()[1])
     return 0.0
+
+
+def wait_for_daemon_http(port: int, timeout: float = 10.0) -> bool:
+    """等到自起 daemon 的 /metrics 端点可读。
+
+    daemon 先装配日志读取链路，再启动 HTTP；端点可读说明 ingest 已就绪，后续向日志
+    追加的行不会落在 OpenAtEnd 定位之前。
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        text = get_prometheus_metrics(port)
+        if text.strip() and ("# HELP" in text or "firewall_" in text):
+            return True
+        time.sleep(0.3)
+    return False
 
 
 def free_tcp_port() -> int:
