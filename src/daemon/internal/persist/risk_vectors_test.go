@@ -63,6 +63,31 @@ func TestBatchDecayVectorsAppliesHalfLife(t *testing.T) {
 	}
 }
 
+// 库侧衰减必须使用注入的半衰期，而不是固定 7 天。
+func TestBatchDecayVectorsUsesInjectedHalfLife(t *testing.T) {
+	db := newTestDB(t)
+	now := time.Now().Unix()
+	ip := "198.51.100.20"
+	if err := db.UpsertRiskVector(ip, risk.RiskVector{Failure: 8, Ban: 2}, now); err != nil {
+		t.Fatalf("写向量失败: %v", err)
+	}
+	ageVector(t, db, ip, 7*24*time.Hour)
+
+	db.SetRiskVectorHalfLife(14)
+	if err := db.BatchDecayVectors(now); err != nil {
+		t.Fatalf("衰减失败: %v", err)
+	}
+
+	row, err := db.GetRiskVector(ip)
+	if err != nil || row == nil {
+		t.Fatalf("读衰减后的向量失败: %v", err)
+	}
+	// 7 天 / 14 天半衰期 = 0.5^0.5 ≈ 0.7071
+	if row.Vector.Failure < 5.6 || row.Vector.Failure > 5.72 {
+		t.Fatalf("14 天半衰期下 7 天后 failure = %v，期望 ~5.66", row.Vector.Failure)
+	}
+}
+
 // 衰减必须被调度器真的跑起来：BatchDecayVectors 此前没有任何调用者，半衰期不生效。
 func TestRiskVectorDecaySchedulerRuns(t *testing.T) {
 	db := newTestDB(t)

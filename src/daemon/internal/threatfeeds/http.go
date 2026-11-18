@@ -47,8 +47,19 @@ func NewHTTPClient(timeout time.Duration, maxRetries int) *HTTPClient {
 		if err != nil {
 			return nil, err
 		}
-		// 只会连到已校验过的地址；不能直接取 ips[0]，那可能是被跳过的未校验项
-		return dialer.DialContext(ctx, network, candidates[0])
+		// 只连已校验过的地址；逐个尝试，首个地址暂时不可达不应让整轮拉取失败。
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("没有可连接的情报源地址")
+		}
+		var lastErr error
+		for _, candidate := range candidates {
+			conn, err := dialer.DialContext(ctx, network, candidate)
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		return nil, fmt.Errorf("连接情报源失败: %w", lastErr)
 	}
 
 	return &HTTPClient{

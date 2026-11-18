@@ -111,12 +111,28 @@ func (h *APIHandlers) AnalysisIp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	banHistory, err := h.getBanHistory(ip)
+	if err != nil {
+		WriteInternalError(w, "查询封禁历史失败")
+		return
+	}
+	reputation, err := h.getReputation(ip)
+	if err != nil {
+		WriteInternalError(w, "查询信誉分失败")
+		return
+	}
+	prediction, err := h.getAttackPrediction(ip)
+	if err != nil {
+		WriteInternalError(w, "生成攻击预测失败")
+		return
+	}
+
 	WriteSuccess(w, AnalysisIpResponse{
 		IP:            ip.String(),
 		Risk:          risk,
-		BanHistory:    h.getBanHistory(ip),
-		Reputation:    h.getReputation(ip),
-		Prediction:    h.getAttackPrediction(ip),
+		BanHistory:    banHistory,
+		Reputation:    reputation,
+		Prediction:    prediction,
 		IsWhitelisted: h.isWhitelisted(ip),
 	})
 }
@@ -260,14 +276,14 @@ func (h *APIHandlers) getRiskVector(ip netip.Addr) (*RiskVectorResponse, error) 
 // ban_events 不存 reason 列，故 Reason 如实留空——不拿 jail 名或猜测文案冒充。
 // remaining_seconds 按「下发时刻 + 计划时长 - 现在」折算；永久封禁或无时长读数（旧行）
 // 给 0，与 banToResponse 对活跃表的口径一致（前端凭 is_permanent 显示「永久」）。
-func (h *APIHandlers) getBanHistory(ip netip.Addr) []BanResponse {
+func (h *APIHandlers) getBanHistory(ip netip.Addr) ([]BanResponse, error) {
 	if h.db == nil {
-		return []BanResponse{}
+		return []BanResponse{}, nil
 	}
 	events, err := h.db.GetBanEventsByIP(ip.String(), analysisBanHistoryLimit)
 	if err != nil {
 		h.server.logger.Error("analysis: query ban events", "ip", ip.String(), "error", err)
-		return []BanResponse{}
+		return nil, err
 	}
 	now := time.Now().Unix()
 	out := make([]BanResponse, 0, len(events))
@@ -288,51 +304,51 @@ func (h *APIHandlers) getBanHistory(ip netip.Addr) []BanResponse {
 			IsPermanent:      e.IsPermanent,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // getReputation 取单个 IP 的信誉条目（复用 ip_reputation + 与 /stats/reputation 同一个
 // mapReputationEntries 映射）。无记录 / 查询失败返回 nil（契约 Option → null）。
-func (h *APIHandlers) getReputation(ip netip.Addr) *ReputationEntryResponse {
+func (h *APIHandlers) getReputation(ip netip.Addr) (*ReputationEntryResponse, error) {
 	if h.db == nil {
-		return nil
+		return nil, nil
 	}
 	rep, err := h.db.GetIPReputation(ip.String())
 	if err != nil {
 		h.server.logger.Error("analysis: query ip reputation", "ip", ip.String(), "error", err)
-		return nil
+		return nil, err
 	}
 	if rep == nil {
-		return nil
+		return nil, nil
 	}
 	entries := mapReputationEntries([]persist.IPReputation{*rep})
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
-	return &entries[0]
+	return &entries[0], nil
 }
 
 // getAttackPrediction 取单个 IP 的攻击预测：跑一遍 /stats/attack-predictions 的检测
 // （同 analysis.PredictAttacks + 同 mapPredictions 映射），从结果里挑出目标 IP。
 // 预测只对「有周期性证据」的地址产出，命中不到就返回 nil（契约 Option → null）。
-func (h *APIHandlers) getAttackPrediction(ip netip.Addr) *AttackPrediction {
+func (h *APIHandlers) getAttackPrediction(ip netip.Addr) (*AttackPrediction, error) {
 	if h.db == nil {
-		return nil
+		return nil, nil
 	}
 	summary, err := analysis.PredictAttacks(h.db, analysisPredictionLimit)
 	if err != nil {
 		h.server.logger.Error("analysis: predict attacks", "ip", ip.String(), "error", err)
-		return nil
+		return nil, err
 	}
 	mapped := mapPredictions(summary, time.Now())
 	target := ip.String()
 	for i := range mapped.Predictions {
 		if mapped.Predictions[i].IP == target {
 			prediction := mapped.Predictions[i]
-			return &prediction
+			return &prediction, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // isWhitelisted 报告 IP 是否被白名单覆盖（复用内核下发同源的白名单镜像 bans.GlobalWhitelist）。

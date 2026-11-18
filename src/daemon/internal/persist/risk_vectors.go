@@ -103,6 +103,29 @@ func (db *DB) SetRiskVectorWeights(weights risk.DimensionWeights) {
 	db.riskWeightsMu.Unlock()
 }
 
+// SetRiskVectorHalfLife 设置库侧衰减的半衰期（天）。
+//
+// 配置 risk_engine.half_life_days 同时作用于内存引擎与库侧衰减；库侧不能继续用
+// 常量 7 天，否则两条读数在数天内分叉。<=0 表示保持默认。
+func (db *DB) SetRiskVectorHalfLife(days float64) {
+	if days <= 0 {
+		return
+	}
+	db.riskWeightsMu.Lock()
+	db.riskHalfLifeDays = days
+	db.riskWeightsMu.Unlock()
+}
+
+// riskDecayHalfLife 返回库侧衰减半衰期，未注入时用引擎默认值。
+func (db *DB) riskDecayHalfLife() float64 {
+	db.riskWeightsMu.RLock()
+	defer db.riskWeightsMu.RUnlock()
+	if db.riskHalfLifeDays <= 0 {
+		return risk.HalfLifeDays
+	}
+	return db.riskHalfLifeDays
+}
+
 // riskDecayWeights 返回衰减与近零判据使用的权重，未设置时用引擎默认值。
 func (db *DB) riskDecayWeights() risk.DimensionWeights {
 	db.riskWeightsMu.RLock()
@@ -129,6 +152,7 @@ func (db *DB) riskDecayWeights() risk.DimensionWeights {
 // 衰减后加权和接近 0 的向量直接删除，避免数据库无限增长；权重与引擎同源。
 func (db *DB) BatchDecayVectors(now int64) error {
 	weights := db.riskDecayWeights()
+	halfLife := db.riskDecayHalfLife()
 
 	tx, err := db.conn.Begin()
 	if err != nil {
@@ -148,13 +172,13 @@ func (db *DB) BatchDecayVectors(now int64) error {
 			cluster = cluster * `+decayExpr+`,
 			updated_at = ?
 		 WHERE updated_at <= ?`,
-		now, risk.HalfLifeDays,
-		now, risk.HalfLifeDays,
-		now, risk.HalfLifeDays,
-		now, risk.HalfLifeDays,
-		now, risk.HalfLifeDays,
-		now, risk.HalfLifeDays,
-		now, risk.HalfLifeDays,
+		now, halfLife,
+		now, halfLife,
+		now, halfLife,
+		now, halfLife,
+		now, halfLife,
+		now, halfLife,
+		now, halfLife,
 		now, now,
 	); err != nil {
 		return fmt.Errorf("decay risk vectors: %w", err)

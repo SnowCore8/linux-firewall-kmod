@@ -245,6 +245,15 @@ func TestAnalysisDBFailuresAreInternalErrors(t *testing.T) {
 	if vec, err := api.getRiskVector(netip.MustParseAddr("203.0.113.7")); err == nil {
 		t.Errorf("getRiskVector 吞掉了库错误（vec=%+v）", vec)
 	}
+	if hist, err := api.getBanHistory(netip.MustParseAddr("203.0.113.7")); err == nil {
+		t.Errorf("getBanHistory 吞掉了库错误（hist=%+v）", hist)
+	}
+	if rep, err := api.getReputation(netip.MustParseAddr("203.0.113.7")); err == nil {
+		t.Errorf("getReputation 吞掉了库错误（rep=%+v）", rep)
+	}
+	if pred, err := api.getAttackPrediction(netip.MustParseAddr("203.0.113.7")); err == nil {
+		t.Errorf("getAttackPrediction 吞掉了库错误（pred=%+v）", pred)
+	}
 }
 
 // TestAnalysisIpNormalizesMappedAddress 核对路径参数按 Unmap 之后的地址处理：

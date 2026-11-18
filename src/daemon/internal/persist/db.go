@@ -31,6 +31,8 @@ type DB struct {
 	riskWeightsMu  sync.RWMutex
 	riskWeights    risk.DimensionWeights
 	riskWeightsSet bool
+	// riskHalfLifeDays 是库侧衰减的半衰期（天），由 Facts 按配置注入；0 表示用默认。
+	riskHalfLifeDays float64
 }
 
 type Config struct {

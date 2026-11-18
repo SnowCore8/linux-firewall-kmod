@@ -192,8 +192,9 @@ func NewFacts(db *DB, opts FactsOptions) *Facts {
 		setWeight("cluster", &weights.Cluster)
 		riskEngine = risk.NewEngineWithHalfLife(weights, opts.RiskHalfLifeDays)
 		if db != nil {
-			// 后台衰减与「近零记录删除」用引擎同一份权重，避免两套默认值各说各话。
+			// 后台衰减与「近零记录删除」用引擎同一份权重与半衰期，避免两套默认值各说各话。
 			db.SetRiskVectorWeights(weights)
+			db.SetRiskVectorHalfLife(opts.RiskHalfLifeDays)
 		}
 		logger.Info("multi-dimensional risk engine enabled")
 	}

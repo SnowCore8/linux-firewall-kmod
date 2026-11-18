@@ -224,12 +224,14 @@ func (r *Reader) Lookup(addr netip.Addr) (Location, bool) {
 }
 
 func (r *Reader) search(start uint32, ip []byte) (Location, bool) {
+	// 整个遍历期间持读锁：Close 在写锁内清空并 Munmap，若这里只拷切片头就解锁，
+	// 慢查询会与 Munmap 并发访问已解除映射的内存（SIGSEGV/SIGBUS）。
 	r.mu.RLock()
+	defer r.mu.RUnlock()
 	data := r.data
 	treeSize := r.treeSize
 	nodeCount := r.nodeCount
 	recordSize := r.recordSize
-	r.mu.RUnlock()
 	if data == nil {
 		return Location{}, false
 	}
