@@ -42,11 +42,7 @@ func (h *APIHandlers) GetConfig(w http.ResponseWriter, r *http.Request) {
 		WriteServiceUnavailable(w, "config not available")
 		return
 	}
-	// 读锁内取整份配置副本（webuiConfigResponse 需要访问多个段落）。
-	config.RLockConfig()
-	cfgCopy := *cfg
-	config.RUnlockConfig()
-	WriteSuccess(w, webuiConfigResponse(&cfgCopy))
+	WriteSuccess(w, h.webuiConfigSnapshot(cfg))
 }
 
 // UpdateConfig 接收 Web UI 配置的**局部更新**（PUT /api/v2/config）。
@@ -103,7 +99,7 @@ func (h *APIHandlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 	// 可能正在锁内改写它，锁外读就是数据竞争。
 	if _, fileBacked := applyWebuiUpdate(config.WebuiConfig{}, &req); !fileBacked {
 		// 空 body（什么都没提交）既不改文件也不下发，只回当前快照。
-		WriteSuccess(w, webuiConfigResponse(h.snapshotConfig(cfg)))
+		WriteSuccess(w, h.webuiConfigSnapshot(cfg))
 		return
 	}
 	// 合并与校验都必须在 configFileMu 内按**当时的** cfg.Webui 重算：两个并发 PUT 各自
@@ -113,13 +109,26 @@ func (h *APIHandlers) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteSuccess(w, webuiConfigResponse(h.snapshotConfig(cfg)))
+	WriteSuccess(w, h.webuiConfigSnapshot(cfg))
 }
 
-// snapshotConfig 在读锁内取一份完整配置副本。
+// webuiConfigSnapshot 在读锁内把配置投影成 Web UI 载荷。
 //
-// 响应要的是「此刻的取值」，而不是一个指向共享实例的指针：解锁之后配置还可能
-// 被 SIGHUP 重载或另一个 PUT 改写。
+// 必须整段持锁投影，而不是「拷一份 *cfg 再解锁」：cfg.Jails 是 slice，值拷贝只复制
+// slice 头，元素仍与 persistWebui 在写锁内改的 Cluster 开关共享内存；解锁后再读
+// cfgCopy.Jails[0] 就是一次数据竞争。webuiConfigResponse 只做字段读取，锁窗口可忽略。
+func (h *APIHandlers) webuiConfigSnapshot(cfg *config.Config) WebuiConfigResponse {
+	config.RLockConfig()
+	defer config.RUnlockConfig()
+	return webuiConfigResponse(cfg)
+}
+
+// snapshotConfig 在读锁内取一份完整配置的值拷贝。
+//
+// 调用方要的是「此刻的取值」，而不是一个指向共享实例的指针：解锁之后配置还可能
+// 被 SIGHUP 重载或另一个 PUT 改写。注意值拷贝只复制 Jails 等 slice 的头部，
+// 要读元素里的字段（如 webuiConfigResponse 的 Cluster 开关）必须走
+// webuiConfigSnapshot，让读取落在读锁内。
 func (h *APIHandlers) snapshotConfig(cfg *config.Config) *config.Config {
 	config.RLockConfig()
 	defer config.RUnlockConfig()

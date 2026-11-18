@@ -2853,7 +2853,7 @@
     "/api/v2/risk/vectors/{ip}": {
       "get": {
         "operationId": "RiskVectors",
-        "summary": "载荷 RiskVectorResponse：指定 IP 的多维风险向量（7 个维度）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006",
+        "summary": "载荷 RiskVectorResponse：指定 IP 的多维风险向量（7 个维度）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006；库查询失败 → 50002",
         "tags": [
           "v2"
         ],
@@ -2874,7 +2874,7 @@
         ],
         "responses": {
           "200": {
-            "description": "载荷 RiskVectorResponse：指定 IP 的多维风险向量（7 个维度）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006",
+            "description": "载荷 RiskVectorResponse：指定 IP 的多维风险向量（7 个维度）。仅在 risk_engine.enabled=true 时可用，否则返回 503。IP 非法 → 40006；库查询失败 → 50002",
             "content": {
               "application/json": {
                 "schema": {
@@ -2887,31 +2887,6 @@
                       "properties": {
                         "data": {
                           "$ref": "#/components/schemas/RiskVectorResponse"
-                        }
-                      }
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "allOf": [
-                    {
-                      "$ref": "#/components/schemas/ApiResponse"
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "integer",
-                          "enum": [
-                            50003
-                          ]
                         }
                       }
                     }
@@ -2936,6 +2911,56 @@
                           "type": "integer",
                           "enum": [
                             40006
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
                           ]
                         }
                       }
@@ -3003,31 +3028,6 @@
               }
             }
           },
-          "503": {
-            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "allOf": [
-                    {
-                      "$ref": "#/components/schemas/ApiResponse"
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "code": {
-                          "type": "integer",
-                          "enum": [
-                            50003
-                          ]
-                        }
-                      }
-                    }
-                  ]
-                }
-              }
-            }
-          },
           "400": {
             "description": "业务码 40006: 封禁详情查询失败（IP 非法）",
             "content": {
@@ -3053,6 +3053,56 @@
               }
             }
           },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "业务码 50003: 依赖未就绪：历史库未初始化 / 日志文件未配置或不可读 / jail 控制器缺席 / SSE 连接名额已满",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50003
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
           "401": {
             "description": "未认证或凭据错误",
             "content": {
@@ -3069,7 +3119,7 @@
     "/api/v2/risk/vectors": {
       "get": {
         "operationId": "ListRiskVectors",
-        "summary": "载荷 RiskVectorListResponse：所有 IP 的风险向量列表（按总风险降序，最多 100 条）。仅在 risk_engine.enabled=true 时可用，否则返回 503",
+        "summary": "载荷 RiskVectorListResponse：所有 IP 的风险向量列表（按总风险降序，最多 100 条）。仅在 risk_engine.enabled=true 时可用，否则返回 503；库查询失败 → 50002",
         "tags": [
           "v2"
         ],
@@ -3080,7 +3130,7 @@
         ],
         "responses": {
           "200": {
-            "description": "载荷 RiskVectorListResponse：所有 IP 的风险向量列表（按总风险降序，最多 100 条）。仅在 risk_engine.enabled=true 时可用，否则返回 503",
+            "description": "载荷 RiskVectorListResponse：所有 IP 的风险向量列表（按总风险降序，最多 100 条）。仅在 risk_engine.enabled=true 时可用，否则返回 503；库查询失败 → 50002",
             "content": {
               "application/json": {
                 "schema": {
@@ -3093,6 +3143,31 @@
                       "properties": {
                         "data": {
                           "$ref": "#/components/schemas/RiskVectorListResponse"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "业务码 50002: 服务端内部错误（历史库查询任务 join 失败等），message 含具体原因",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ApiResponse"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "integer",
+                          "enum": [
+                            50002
+                          ]
                         }
                       }
                     }

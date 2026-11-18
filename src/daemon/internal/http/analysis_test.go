@@ -10,6 +10,7 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -205,5 +206,69 @@ func TestAnalysisIpPopulatedWiring(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("top_risk_ips 未含 %s: %v", ip, arr)
+	}
+}
+
+// TestAnalysisDBFailuresAreInternalErrors 核对历史库查询失败回 50002，而不是把失败折成
+// 空读数仍回 200：契约给两条综合分析路由都声明了该码，面板不能把「查不动」读成「无威胁」。
+func TestAnalysisDBFailuresAreInternalErrors(t *testing.T) {
+	db := newAnalysisDB(t, "broken.db")
+	if err := db.Close(); err != nil {
+		t.Fatalf("关闭测试库失败: %v", err)
+	}
+	s, api := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
+
+	for _, path := range []string{
+		analysisPath(httpcontract.RouteGetApiV2AnalysisSummary),
+		"/api/v2/analysis/ip/203.0.113.7",
+	} {
+		w := authedGet(t, s, path)
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("%s 状态码 %d，期望 500（库已关闭，契约声明 50002；body=%s）",
+				path, w.Code, truncate(w.Body.Bytes()))
+			continue
+		}
+		env := decodeEnvelope(t, w.Body.Bytes())
+		if got := envelopeCode(t, env); got != httpcontract.Code50002 {
+			t.Errorf("%s 信封 code = %d，期望 %d", path, got, httpcontract.Code50002)
+		}
+		assertNullData(t, env)
+	}
+
+	// 三个降级点逐个核对：错误必须从查询处上抛，不能被折成空数组/0/nil。
+	if vectors, err := api.getTopRiskIPs(10); err == nil {
+		t.Errorf("getTopRiskIPs 吞掉了库错误（vectors=%v）", vectors)
+	}
+	if count, err := api.getCollaborativeAttackCount(); err == nil {
+		t.Errorf("getCollaborativeAttackCount 吞掉了库错误（count=%d）", count)
+	}
+	if vec, err := api.getRiskVector(netip.MustParseAddr("203.0.113.7")); err == nil {
+		t.Errorf("getRiskVector 吞掉了库错误（vec=%+v）", vec)
+	}
+}
+
+// TestAnalysisIpNormalizesMappedAddress 核对路径参数按 Unmap 之后的地址处理：
+// ::ffff:1.2.3.4 与 1.2.3.4 必须命中同一条风险向量并回显同一种写法（写入侧已归一）。
+func TestAnalysisIpNormalizesMappedAddress(t *testing.T) {
+	db := newAnalysisDB(t, "mapped.db")
+	const ip = "203.0.113.7"
+	if err := db.UpsertRiskVector(ip, risk.RiskVector{Failure: 1, Ban: 2, Scan: 3}, 1_700_000_000); err != nil {
+		t.Fatalf("写风险向量失败: %v", err)
+	}
+	s, _ := newTestServer(t, func(cfg *APIConfig) { cfg.DB = db })
+
+	dotted := authedGet(t, s, "/api/v2/analysis/ip/"+ip)
+	mapped := authedGet(t, s, "/api/v2/analysis/ip/::ffff:"+ip)
+	if mapped.Code != http.StatusOK {
+		t.Fatalf("IPv4-mapped 地址状态码 %d，期望 200（body=%s）", mapped.Code, truncate(mapped.Body.Bytes()))
+	}
+	if !strings.Contains(string(mapped.Body.Bytes()), "\"ip\":\""+ip+"\"") {
+		t.Errorf("mapped 地址回显未归一: %s", truncate(mapped.Body.Bytes()))
+	}
+	if !strings.Contains(string(mapped.Body.Bytes()), "\"risk\":{") {
+		t.Errorf("mapped 地址查不到已写入的风险向量: %s", truncate(mapped.Body.Bytes()))
+	}
+	if got, want := string(mapped.Body.Bytes()), string(dotted.Body.Bytes()); got != want {
+		t.Errorf("两种写法的响应不一致:\n映射 %s\n点分 %s", truncate([]byte(got)), truncate([]byte(want)))
 	}
 }

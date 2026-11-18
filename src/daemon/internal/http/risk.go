@@ -30,6 +30,9 @@ func (h *APIHandlers) RiskVectors(w http.ResponseWriter, r *http.Request) {
 		WriteCode(w, httpcontract.Code40006, "invalid IP address: "+ipStr)
 		return
 	}
+	// 风险引擎写入侧存的是 Unmap 之后的地址；读侧不归一，::ffff:1.2.3.4 与
+	// 1.2.3.4 会查到两条不同的记录（后者通常为空）。
+	addr = addr.Unmap()
 
 	vec, err := h.db.GetRiskVector(addr.String())
 	if err != nil {
@@ -144,6 +147,8 @@ func (h *APIHandlers) RiskEvents(w http.ResponseWriter, r *http.Request) {
 		WriteCode(w, httpcontract.Code40006, "invalid IP address: "+ipStr)
 		return
 	}
+	// 与 /risk/vectors/:ip 同一口径：路径参数先归一再查库/回显。
+	addr = addr.Unmap()
 
 	limit := parseLimit(r, 100, 100)
 	offset := parseEventOffset(r)

@@ -46,7 +46,8 @@ type AnalysisIpResponse struct {
 }
 
 // AnalysisSummary 处理 GET /api/v2/analysis/summary
-// 返回综合分析摘要：威胁等级复用 stats 面的读数，其余维度在接线前降级为零值。
+// 返回综合分析摘要：威胁等级复用 stats 面的读数；历史库查询失败回 50002
+// （契约给这条路由声明了该码），不把失败折成空读数冒充「无威胁」。
 func (h *APIHandlers) AnalysisSummary(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
 		WriteServiceUnavailable(w, "历史数据库未初始化")
@@ -59,11 +60,20 @@ func (h *APIHandlers) AnalysisSummary(w http.ResponseWriter, r *http.Request) {
 
 	activeAttacks := h.getActiveAttackCount()
 	anomalies := h.getAnomalyCount()
-	collaborative := h.getCollaborativeAttackCount()
+	collaborative, err := h.getCollaborativeAttackCount()
+	if err != nil {
+		WriteInternalError(w, "查询协同攻击失败")
+		return
+	}
+	topRiskIPs, err := h.getTopRiskIPs(10)
+	if err != nil {
+		WriteInternalError(w, "查询风险向量失败")
+		return
+	}
 
 	WriteSuccess(w, AnalysisSummaryResponse{
 		ThreatLevel:        h.buildThreatLevel(snap, now, recentBans),
-		TopRiskIPs:         h.getTopRiskIPs(10),
+		TopRiskIPs:         topRiskIPs,
 		ActiveAttacks:      activeAttacks,
 		AnomaliesCount:     anomalies,
 		CollaborativeCount: collaborative,
@@ -91,10 +101,19 @@ func (h *APIHandlers) AnalysisIp(w http.ResponseWriter, r *http.Request) {
 		WriteCode(w, httpcontract.Code40006, "IP 地址非法: "+ipStr)
 		return
 	}
+	// 写入侧（Facts/bans）存的是 Unmap 之后的地址；读侧不归一的话，
+	// ::ffff:1.2.3.4 与 1.2.3.4 会落到两个不同的键上、回显两种写法。
+	ip = ip.Unmap()
+
+	risk, err := h.getRiskVector(ip)
+	if err != nil {
+		WriteInternalError(w, "查询风险向量失败")
+		return
+	}
 
 	WriteSuccess(w, AnalysisIpResponse{
 		IP:            ip.String(),
-		Risk:          h.getRiskVector(ip),
+		Risk:          risk,
 		BanHistory:    h.getBanHistory(ip),
 		Reputation:    h.getReputation(ip),
 		Prediction:    h.getAttackPrediction(ip),
@@ -135,10 +154,11 @@ func riskVectorResponse(vec persist.RiskVectorRow) RiskVectorResponse {
 // getTopRiskIPs 取总风险最高的前 limit 个 IP（复用风险引擎的 ip_risk_vectors）。
 //
 // GetAllRiskVectors 已按 total_risk 降序排列并限制返回数量，这里只需截断到 limit。
-// 引擎未启用 / 无读数 / 查询失败都降级为空数组（契约是 Vec，不是 null）。
-func (h *APIHandlers) getTopRiskIPs(limit int) []RiskVectorResponse {
+// 无读数降级为空数组（契约是 Vec，不是 null）；查询失败必须上抛给 handler 回 50002——
+// 把库错误折成空数组会让面板把「查不动」读成「没有风险」。
+func (h *APIHandlers) getTopRiskIPs(limit int) ([]RiskVectorResponse, error) {
 	if h.db == nil || limit <= 0 {
-		return []RiskVectorResponse{}
+		return []RiskVectorResponse{}, nil
 	}
 	// 多取一些以应对可能的排序差异，但不超过合理范围
 	fetchLimit := limit * 2
@@ -148,7 +168,7 @@ func (h *APIHandlers) getTopRiskIPs(limit int) []RiskVectorResponse {
 	vectors, err := h.db.GetAllRiskVectors(fetchLimit)
 	if err != nil {
 		h.server.logger.Error("analysis: query risk vectors", "error", err)
-		return []RiskVectorResponse{}
+		return nil, err
 	}
 	if len(vectors) > limit {
 		vectors = vectors[:limit]
@@ -157,7 +177,7 @@ func (h *APIHandlers) getTopRiskIPs(limit int) []RiskVectorResponse {
 	for _, vec := range vectors {
 		out = append(out, riskVectorResponse(vec))
 	}
-	return out
+	return out, nil
 }
 
 // totalRisk 是七维之和，与 riskVectorResponse 的 TotalRisk 同一算式（排序用）。
@@ -183,17 +203,18 @@ func (h *APIHandlers) getAnomalyCount() uint32 {
 }
 
 // getCollaborativeAttackCount 取协同攻击窗口数，复用 /stats/collaborative-attacks 的检测
-// （同窗口/同最小源数/同事件上限）。历史库缺席或查询失败降级为 0（如实报「无协同攻击」）。
-func (h *APIHandlers) getCollaborativeAttackCount() uint32 {
+// （同窗口/同最小源数/同事件上限）。历史库缺席给 0（handler 已先行回 50003）；查询失败
+// 必须上抛给 handler 回 50002，不能折成 0 冒充「无协同攻击」。
+func (h *APIHandlers) getCollaborativeAttackCount() (uint32, error) {
 	if h.db == nil {
-		return 0
+		return 0, nil
 	}
 	findings, err := analysis.DetectCollaborativeAttacks(h.db, 300, 3, analysisCollaborativeLimit, 10000)
 	if err != nil {
 		h.server.logger.Error("analysis: detect collaborative attacks", "error", err)
-		return 0
+		return 0, err
 	}
-	return uint32(len(findings))
+	return uint32(len(findings)), nil
 }
 
 // generateAnalysisSummary 把三路计数折成一句面板可读的结论。计数为真时逐项点名，避免
@@ -216,21 +237,22 @@ func (h *APIHandlers) generateAnalysisSummary(attacks, anomalies, collaborative 
 }
 
 // getRiskVector 取单个 IP 的风险向量（复用风险引擎 ip_risk_vectors）。
-// 无记录 / 引擎未启用 / 查询失败都返回 nil（契约 Option → null，面板显示「无读数」）。
-func (h *APIHandlers) getRiskVector(ip netip.Addr) *RiskVectorResponse {
+// 无记录返回 (nil, nil)（契约 Option → null，面板显示「无读数」）；查询失败上抛，
+// 由 handler 回 50002——把失败折成 null 等于把「查不动」画成「这个 IP 没有读数」。
+func (h *APIHandlers) getRiskVector(ip netip.Addr) (*RiskVectorResponse, error) {
 	if h.db == nil {
-		return nil
+		return nil, nil
 	}
 	vec, err := h.db.GetRiskVector(ip.String())
 	if err != nil {
 		h.server.logger.Error("analysis: query risk vector", "ip", ip.String(), "error", err)
-		return nil
+		return nil, err
 	}
 	if vec == nil {
-		return nil
+		return nil, nil
 	}
 	resp := riskVectorResponse(*vec)
-	return &resp
+	return &resp, nil
 }
 
 // getBanHistory 取单个 IP 的封禁历史（复用 ban_events 底账）。

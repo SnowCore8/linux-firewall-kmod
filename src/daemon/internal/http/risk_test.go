@@ -8,6 +8,8 @@ package http
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -28,6 +30,12 @@ func riskEnabledConfig() *config.Config {
 // riskEventsPath 从契约的注册串拼出可请求路径，避免测试里复制第二份路径。
 func riskEventsPath(ip string) string {
 	pattern := strings.TrimPrefix(httpcontract.RouteGetApiV2RiskEventsIp, "GET ")
+	return strings.Replace(pattern, "{ip}", ip, 1)
+}
+
+// riskVectorsPath 从契约的注册串拼出单 IP 风险向量查询路径（与 riskEventsPath 同形）。
+func riskVectorsPath(ip string) string {
+	pattern := strings.TrimPrefix(httpcontract.RouteGetApiV2RiskVectorsIp, "GET ")
 	return strings.Replace(pattern, "{ip}", ip, 1)
 }
 
@@ -128,5 +136,80 @@ func TestListRiskVectorsReportsFullTotal(t *testing.T) {
 	}
 	if len(got.Vectors) != 100 {
 		t.Errorf("返回 %d 条，期望上限 100 条", len(got.Vectors))
+	}
+}
+
+// TestRiskDBFailuresAreDeclaredInternalErrors 核对库查询失败回 50002，且契约给这三条
+// 路由声明了该码：实现产出的业务码必须是契约声明过的，否则前端按码分支永远落空。
+func TestRiskDBFailuresAreDeclaredInternalErrors(t *testing.T) {
+	db := newAnalysisDB(t, "risk-broken.db")
+	if err := db.Close(); err != nil {
+		t.Fatalf("关闭测试库失败: %v", err)
+	}
+	s, _ := newTestServer(t, func(cfg *APIConfig) {
+		cfg.DB = db
+		cfg.GetCurrentConfig = riskEnabledConfig
+	})
+
+	cases := []struct{ pattern, path string }{
+		{httpcontract.RouteGetApiV2RiskVectorsIp, riskVectorsPath("203.0.113.1")},
+		{httpcontract.RouteGetApiV2RiskEventsIp, riskEventsPath("203.0.113.1")},
+		{httpcontract.RouteGetApiV2RiskVectors, strings.TrimPrefix(httpcontract.RouteGetApiV2RiskVectors, "GET ")},
+	}
+	declared := map[string][]int{}
+	for _, route := range httpcontract.Routes {
+		declared[route.Pattern] = route.Codes
+	}
+	for _, tc := range cases {
+		w := authedGet(t, s, tc.path)
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("%s 状态码 %d，期望 500（body=%s）", tc.path, w.Code, truncate(w.Body.Bytes()))
+			continue
+		}
+		env := decodeEnvelope(t, w.Body.Bytes())
+		if got := envelopeCode(t, env); got != httpcontract.Code50002 {
+			t.Errorf("%s 信封 code = %d，期望 %d", tc.pattern, got, httpcontract.Code50002)
+		}
+		if !slices.Contains(declared[tc.pattern], httpcontract.Code50002) {
+			t.Errorf("%s 契约未声明 50002（declared=%v）", tc.pattern, declared[tc.pattern])
+		}
+	}
+}
+
+// TestRiskEndpointsNormalizeMappedAddress 核对 ::ffff:1.2.3.4 与 1.2.3.4 在风险端点
+// 返回同一份载荷：写入侧存的是 Unmap 之后的地址。
+func TestRiskEndpointsNormalizeMappedAddress(t *testing.T) {
+	db := newAnalysisDB(t, "risk-mapped.db")
+	const ip = "203.0.113.40"
+	if err := db.UpsertRiskVector(ip, risk.RiskVector{Scan: 2}, 1_700_000_000); err != nil {
+		t.Fatalf("写风险向量失败: %v", err)
+	}
+	seedRiskEvents(t, db, ip, 1)
+	s, _ := newTestServer(t, func(cfg *APIConfig) {
+		cfg.DB = db
+		cfg.GetCurrentConfig = riskEnabledConfig
+	})
+
+	for _, tc := range []struct {
+		name string
+		path func(string) string
+	}{
+		{"风险向量", riskVectorsPath},
+		{"攻击事件", riskEventsPath},
+	} {
+		dotted := authedGet(t, s, tc.path(ip))
+		mapped := authedGet(t, s, tc.path("::ffff:"+ip))
+		if mapped.Code != http.StatusOK {
+			t.Errorf("%s 的 mapped 地址状态码 %d（body=%s）",
+				tc.name, mapped.Code, truncate(mapped.Body.Bytes()))
+			continue
+		}
+		if got, want := string(mapped.Body.Bytes()), string(dotted.Body.Bytes()); got != want {
+			t.Errorf("%s 两种写法响应不一致:\n映射 %s\n点分 %s",
+				tc.name, truncate([]byte(got)), truncate([]byte(want)))
+		}
+		if !strings.Contains(string(mapped.Body.Bytes()), "\"ip\":\""+ip+"\"") {
+			t.Errorf("%s 的 mapped 回显未归一: %s", tc.name, truncate(mapped.Body.Bytes()))
+		}
 	}
 }

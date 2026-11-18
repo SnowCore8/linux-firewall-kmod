@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/snowcore8/linux-firewall-kmod/daemon/internal/config"
@@ -433,4 +434,55 @@ func TestUpdateConfigRejectsDirectoryMode(t *testing.T) {
 	if len(rec.changes) != 0 {
 		t.Errorf("目录模式拒绝了更新，却下发了 %d 次内核配置", len(rec.changes))
 	}
+}
+
+// TestGetConfigSnapshotsClusterTogglesUnderLock 是并发读写的回归用例。
+//
+// webuiConfigResponse 读 Jails[0].Cluster，persistWebui 在写锁内改同一字段；旧实现只把
+// *cfg 拷一份（Jails 仍是同一个 slice），解锁后再读元素，-race 下 GET 与 PUT 并发即报竞争。
+func TestGetConfigSnapshotsClusterTogglesUnderLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := "defaults:\n  max_retries: 3\n  findtime: 600\n  ban_time: 600\n" +
+		"jails:\n  sshd:\n    enabled: true\n    log_files:\n      - /var/log/auth.log\n"
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatalf("预置配置文件失败: %v", err)
+	}
+	live := config.Default()
+	// GET 投影读的就是这个元素：没有 jail 时 webuiConfigResponse 的 len 守卫会跳过读取，
+	// 用例也就测不到竞争，所以必须给活配置挂一个真 jail。
+	live.Jails = []config.Jail{config.NewJail("sshd")}
+	s, _ := newTestServer(t, func(cfg *APIConfig) {
+		cfg.GetConfigPath = func() string { return path }
+		cfg.GetCurrentConfig = func() *config.Config { return &live }
+		cfg.KernelConfig = &recordingKernelConfig{}
+	})
+
+	const (
+		getRounds = 200
+		putRounds = 50
+	)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < getRounds; i++ {
+			if w := authedGet(t, s, "/api/v2/config"); w.Code != http.StatusOK {
+				t.Errorf("GET /config 状态码 %d，期望 200（body=%s）",
+					w.Code, truncate(w.Body.Bytes()))
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		body := `{"rate_warning_pps":60000,"cluster_enabled":true,"cluster_audit_only":false}`
+		for i := 0; i < putRounds; i++ {
+			if w := authedSend(t, s, http.MethodPut, "/api/v2/config", "application/json", body); w.Code != http.StatusOK {
+				t.Errorf("PUT /config 状态码 %d，期望 200（body=%s）",
+					w.Code, truncate(w.Body.Bytes()))
+				return
+			}
+		}
+	}()
+	wg.Wait()
 }

@@ -61,8 +61,8 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	s.httpServer = &http.Server{
-		// 安全头在连接配额**外面**：配额满时用 http.Error 直接回 503，那条响应不经过
-		// mux，中间件排在里面就等于限额告知没有 CSP/nosniff。
+		// 安全头在连接配额**外面**：配额满时由 connectionLimiter 直接写 503 信封，那条
+		// 响应不经过 mux，中间件排在里面就等于限额告知没有 CSP/nosniff。
 		Handler:           s.securityHeaders(s.connectionLimiter(mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -131,9 +131,12 @@ func (s *Server) connectionLimiter(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		if s.activeConns >= s.maxConns {
+			// 计数在锁内取值：解锁后再读 activeConns 会与其它连接的 ++/-- 竞争。
+			active, max := s.activeConns, s.maxConns
 			s.mu.Unlock()
-			s.logger.Warn("connection limit reached", "active", s.activeConns, "max", s.maxConns)
-			http.Error(w, "connection limit reached", http.StatusServiceUnavailable)
+			s.logger.Warn("connection limit reached", "active", active, "max", max)
+			// 走统一信封（code 50003）：限额告知也是契约响应，不能是裸 text/plain。
+			WriteServiceUnavailable(w, "连接数已达上限，请稍后重试")
 			return
 		}
 		s.activeConns++

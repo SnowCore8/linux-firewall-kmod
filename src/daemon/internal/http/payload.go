@@ -214,6 +214,9 @@ type WebuiConfigResponse struct {
 
 // webuiConfigResponse 把配置里的 Web UI 段落映射成契约载荷。
 //
+// **调用方必须持有 config 读锁**（生产路径统一走 webuiConfigSnapshot）：功能开关取自
+// cfg.Jails 的 slice 元素，与 persistWebui 在写锁内的赋值共享内存，锁外读就是数据竞争。
+//
 // 只读 cfg.Webui 这一段，凭据（config.Config 根上的 MetricsPassword 等）根本不在取值范围内，
 // 因此不需要「先复制再清零」的旁路——不是靠记得清零，而是压根没有可泄露的字段。
 // ClearLogsAt 空串归一成 nil（见类型注释）。
