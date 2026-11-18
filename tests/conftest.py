@@ -629,6 +629,10 @@ def daemon_run_probe(cmd: list[str], timeout: int = 3) -> tuple[int | None, byte
         return None, b""
 
 
+# 断言「某个 IP 不应被封」的用例必须在配置里显式写 threat_feeds.enabled: false：
+# 内置情报源默认开启，命中即直封（src/daemon/internal/runtime/pipeline.go 的
+# feedBanConfidence=0.8），会盖掉本地判据。test_22 的集群用例按这条约定写。
+#
 # max_retries 的上限：窗口只保留 detect.MaxTimestampsPerIP(100) 条时间戳，阈值还要叠加
 # 高峰 +2 与内网 +3，超过 95 的阈值永远达不到，daemon 会拒绝启动（config/parser.go）。
 MAX_RETRIES_CEILING = 95
