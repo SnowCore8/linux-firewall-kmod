@@ -10,7 +10,8 @@
  *         → procfs → netfilter 钩子(v4,v6)
  *   exit: shutting_down=1 → 取消 delayed work → 注销钩子(v4,v6) → synchronize_rcu
  *         → 注销 notifier → 销毁 procfs → synchronize_rcu → 保存状态
- *         → 全表清理（ban/wl/rate/stats/local）→ netlink
+ *         → 停止 netlink 接收并等待在途回调 → 全表清理
+ *         （ban/wl/rate/stats/local）→ 释放 netlink socket
  *
  * 顺序上的硬约束（写反就是缺陷）：
  *
@@ -358,7 +359,11 @@ static void __exit fw_exit(void) {
   if (fw_state_file && fw_state_file[0])
     (void)fw_state_save();
 
-  /* 6) 全表清理：每个子系统自带 synchronize_rcu() + rcu_barrier() */
+  /* 6) 先停 netlink 接收并等在途回调退出，再清表：回调会改封禁/白名单/速率表，
+   *    也可能在 socket 置空后发送事件。socket 本身仍留到最后释放。 */
+  fw_netlink_quiesce();
+
+  /* 7) 全表清理：每个子系统自带 synchronize_rcu() + rcu_barrier() */
   fw_ban_exit();
   fw_wl_exit();
   fw_rate_exit();
@@ -366,7 +371,7 @@ static void __exit fw_exit(void) {
   fw_local_exit();
   fw_ports_exit();
 
-  /* 7) netlink 最后销毁：以上各步都可能推送事件 */
+  /* 8) netlink socket 最后销毁：以上各步都可能推送事件 */
   fw_netlink_exit();
 
   pr_info("模块清理完成\n");

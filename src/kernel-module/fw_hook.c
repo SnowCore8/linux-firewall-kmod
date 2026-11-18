@@ -360,6 +360,16 @@ static unsigned int fw_hook_ipv6(void *priv, struct sk_buff *skb,
   if (unlikely(pkt_len > skb->len))
     return NF_ACCEPT;
 
+  /* 扩展头循环里的 pskb_may_pull 可能 pskb_expand_head 并释放旧 head：此前
+   * skb_header_pointer 在头部线性时返回的是 skb->data，循环之后再解引用就是
+   * 悬空指针。先把固定 40 字节头落到本地副本（非线性时它已经拷过），循环及
+   * 其后的 saddr / hop_limit 一律只读副本（与 IPv4 路径每次 pull 后重取头
+   * 的做法等价）。 */
+  if (iph6 != &iph6_copy) {
+    memcpy(&iph6_copy, iph6, sizeof(iph6_copy));
+    iph6 = &iph6_copy;
+  }
+
   /* 扩展头遍历：深度超限或解析失败即丢包，防止恶意报文耗尽 CPU 或绕过判定 */
   nexthdr = iph6->nexthdr;
   offset = sizeof(struct ipv6hdr);

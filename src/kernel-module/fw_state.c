@@ -633,6 +633,14 @@ static int fw_state_restore_wl(const char *rest, u8 af) {
 
   /* 文件里存的已是 network 地址，再归一化一次以防旧文件写入过主机位 */
   fw_addr_normalize(af, &addr, (u8)plen);
+
+  /* 与 procfs / netlink 写侧同构：归一化可能把 x/0 变成 0.0.0.0/0 或 ::/0，
+   * 这种条目会短路一切封禁；损坏/旧格式文件里的这类行直接跳过。 */
+  if (!fw_addr_is_valid(af, &addr)) {
+    kfree(base);
+    return -EINVAL;
+  }
+
   ret = fw_wl_add(af, &addr, (u8)plen, dev_str && dev_str[0] ? dev_str : "restored");
 
   kfree(base);

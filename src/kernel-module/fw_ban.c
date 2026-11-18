@@ -469,6 +469,7 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len, u32 duration_se
   char reason_copy[32];
   char jail_copy[32];
   u32 bkt = fw_ban_bucket(layer, af, addr, prefix_len);
+  bool expired_replaced = false;
 
   n = fw_ban_alloc(af, addr, prefix_len, duration_secs, reason, jail, start_unix);
   if (!n)
@@ -494,7 +495,9 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len, u32 duration_se
     hlist_del_init_rcu(&existing->hash);
     atomic_dec(&fw_info.ban_count);
     call_rcu(&existing->rcu, fw_ban_free_rcu);
-    /* 旧节点已摘链，继续走下方的新插入路径 */
+    expired_replaced = true;
+    /* 旧节点已摘链，层计数与到期统计在桶锁外补（约定见文件头），
+     * 之后继续走下方的新插入路径 */
   }
 
   /*
@@ -505,6 +508,10 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len, u32 duration_se
     atomic_dec(&fw_info.ban_count);
     fw_stat_bump_ban_full();
     spin_unlock_bh(&layer->locks[bkt]);
+    if (expired_replaced) {
+      fw_ban_layer_release(t, prefix_len, 1);
+      fw_stat_add_expired(1);
+    }
     kfree(n);
     return -ENOSPC;
   }
@@ -518,6 +525,10 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len, u32 duration_se
   if (flood_gate && !fw_ban_flood_allow()) {
     atomic_dec(&fw_info.ban_count);
     spin_unlock_bh(&layer->locks[bkt]);
+    if (expired_replaced) {
+      fw_ban_layer_release(t, prefix_len, 1);
+      fw_stat_add_expired(1);
+    }
     kfree(n);
     return -EBUSY;
   }
@@ -540,6 +551,13 @@ static int fw_ban_insert(u8 af, const void *addr, u8 prefix_len, u32 duration_se
 
   hlist_add_head_rcu(&n->hash, &layer->buckets[bkt]);
   spin_unlock_bh(&layer->locks[bkt]);
+
+  /* 被替换的过期旧节点已在桶锁内摘链：层计数与到期计数按 fw_ban_del 的
+   * 约定在锁外补上，再为新节点 mark 层位图（顺序理由见文件头） */
+  if (expired_replaced) {
+    fw_ban_layer_release(t, prefix_len, 1);
+    fw_stat_add_expired(1);
+  }
 
   /* 位图维护在桶锁之外，且必须在挂链之后（顺序理由见文件头） */
   fw_ban_layer_mark(t, prefix_len);

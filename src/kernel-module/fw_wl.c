@@ -163,6 +163,12 @@ int fw_wl_add(u8 af, const void *ip, u8 prefix_len, const char *device_name) {
   if (prefix_len > fw_wl_max_prefix(af))
     return -EINVAL;
 
+  /* 与 remove 对称：本机接口精确地址由 fw_local.c 在热路径自动豁免，手工加入
+   * 白名单只会造出一条 remove 永远以 -EPERM 拒绝删除的条目。自动维护路径不经过
+   * 本函数（fw_netdev.c 只对账删除），故直接拒绝。 */
+  if (fw_local_lookup(af, ip))
+    return -EPERM;
+
   subnet = !fw_wl_is_full_prefix(af, prefix_len);
 
   spin_lock_bh(&fw_info.wl_lock);

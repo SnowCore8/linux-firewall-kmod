@@ -23,6 +23,9 @@
 int fw_netlink_init(void);
 void fw_netlink_exit(void);
 
+/* 停止接收并等待在途回调退出；必须在清表之前调用（socket 仍由 exit 最后释放） */
+void fw_netlink_quiesce(void);
+
 /* 发送锁：保护发送与 socket 销毁之间的竞态。
  * 到期回调在 rcu_read_unlock() 之后发送，此时 fw_netlink_exit() 可能正在释放 socket。
  * 读锁允许多个发送并发，写锁在 exit() 中独占，确保所有发送完成后才释放 socket。 */

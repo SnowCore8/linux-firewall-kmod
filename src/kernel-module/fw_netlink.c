@@ -100,6 +100,20 @@ static DEFINE_SPINLOCK(fw_nl_daemon_lock);
  * 读锁允许多个发送并发，写锁在 exit() 中独占，确保所有发送完成后才释放 socket。 */
 static DECLARE_RWSEM(fw_nl_send_sem);
 
+/*
+ * 接收生命周期：fw_nl_recv_msg() 是 netlink 内核回调，fw_exit() 清表与
+ * fw_netlink_exit() 释放 socket 可能与之并发。进入回调时在 mutex 下检查
+ * accepting 并递增在途计数，返回时递减；quiesce 置 accepting=false 后等待
+ * 计数归零，即可确认没有回调还在改表或发送事件。
+ *
+ * 不用读写信号量：回调自身还会取 fw_nl_send_sem 的读锁发事件，若这里用写锁
+ * 排队会与回调形成死锁（回调等读锁、退出等回调）。mutex 只保护入口那一刻。
+ */
+static DEFINE_MUTEX(fw_nl_lifecycle_lock);
+static bool fw_nl_accepting;
+static atomic_t fw_nl_inflight = ATOMIC_INIT(0);
+static DECLARE_WAIT_QUEUE_HEAD(fw_nl_quiesce_wq);
+
 void fw_nl_send_lock(void) {
   down_read(&fw_nl_send_sem);
 }
@@ -693,11 +707,12 @@ static u32 fw_nl_apply_config(const struct fw_set_config *c) {
 
     if (!v || v > 60) {
       rejected |= FW_CONFIG_FLAGS_RATE_WINDOW;
-    } else {
+    } else if (v != READ_ONCE(fw_info.rate_window_seconds)) {
       WRITE_ONCE(fw_info.rate_window_seconds, v);
       smp_wmb();
       WRITE_ONCE(fw_info.rate_window_jiffies, v * HZ);
-      /* 窗口长度变了，旧条目的窗口起点失去意义：清表重建 */
+      /* 只有窗口长度真的变了，旧条目的窗口起点才失去意义；重复下发相同
+       * 窗口（daemon 周期配置）不得清表，否则累计速率每轮被清零。 */
       fw_rate_clear_all();
     }
   }
@@ -897,7 +912,7 @@ static bool fw_nl_daemon_alive(void) {
   return rc >= 0;
 }
 
-static void fw_nl_recv_msg(struct sk_buff *skb) {
+static void fw_nl_recv_msg_body(struct sk_buff *skb) {
   while (skb->len >= nlmsg_total_size(0)) {
     struct nlmsghdr *nlh;
     struct fw_msg_hdr *h;
@@ -1153,9 +1168,42 @@ static void fw_nl_recv_msg(struct sk_buff *skb) {
   }
 }
 
+/*
+ * 生命周期包装：原回调体（fw_nl_recv_msg_body）的各分支 return/break 语义保持
+ * 不变；这里只负责「进入时登记、返回时注销」，让 quiesce 能等待在途回调结束。
+ */
+static void fw_nl_recv_msg(struct sk_buff *skb) {
+  mutex_lock(&fw_nl_lifecycle_lock);
+  if (!fw_nl_accepting) {
+    mutex_unlock(&fw_nl_lifecycle_lock);
+    pr_debug_ratelimited("netlink: 接收已停止，丢弃指令\n");
+    return;
+  }
+  atomic_inc(&fw_nl_inflight);
+  mutex_unlock(&fw_nl_lifecycle_lock);
+
+  fw_nl_recv_msg_body(skb);
+
+  if (atomic_dec_and_test(&fw_nl_inflight))
+    wake_up(&fw_nl_quiesce_wq);
+}
+
 /* ============================================================================
  * 生命周期
  * ==========================================================================*/
+
+/*
+ * 停止接收并等待在途回调退出。必须在清表之前调用：回调可继续下发改表指令，
+ * 若先清表再停接收，已通过 shutting_down 检查的回调会碰到已释放的表。
+ * 幂等：重复调用只会在计数已归零时立即返回。
+ */
+void fw_netlink_quiesce(void) {
+  mutex_lock(&fw_nl_lifecycle_lock);
+  fw_nl_accepting = false;
+  mutex_unlock(&fw_nl_lifecycle_lock);
+
+  wait_event(fw_nl_quiesce_wq, atomic_read(&fw_nl_inflight) == 0);
+}
 
 int fw_netlink_init(void) {
   struct netlink_kernel_cfg cfg = {
@@ -1186,6 +1234,12 @@ int fw_netlink_init(void) {
 #undef RATES_HDR
 #undef RATES_ESZ
 
+  /* 允许回调进入，并清零在途计数（静态初值之外，多一次显式初始化） */
+  mutex_lock(&fw_nl_lifecycle_lock);
+  fw_nl_accepting = true;
+  mutex_unlock(&fw_nl_lifecycle_lock);
+  atomic_set(&fw_nl_inflight, 0);
+
   fw_nl_sock = netlink_kernel_create(&init_net, FW_NL_PROTO, &cfg);
   if (!fw_nl_sock) {
     pr_err("netlink socket 创建失败\n");
@@ -1201,6 +1255,9 @@ int fw_netlink_init(void) {
 }
 
 void fw_netlink_exit(void) {
+  /* 先停接收并等回调退出，再释放 socket（init 失败路径也走这里） */
+  fw_netlink_quiesce();
+
   if (!fw_nl_sock)
     return;
 

@@ -438,6 +438,11 @@ static ssize_t whitelist_write(struct file *file, const char __user *buf,
   /* 白名单表存 network 地址：归一化后再增删，否则同一子网会重复入表 */
   fw_addr_normalize(af, &addr, prefix_len);
 
+  /* 归一化会清掉主机位：1.2.3.4/0 会变成 0.0.0.0/0（覆盖全部地址、短路一切
+   * 封禁）。与 netlink 路径同构，归一化后再校验一次，非法即拒绝。 */
+  if (!fw_addr_is_valid(af, &addr))
+    return -EINVAL;
+
   if (is_remove) {
     ret = fw_wl_remove(af, &addr, prefix_len);
     if (ret)
