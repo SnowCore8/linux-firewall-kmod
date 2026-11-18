@@ -52,7 +52,7 @@ jobs:
         id: 'mint_identity_token'
         if: |-
           ${{ vars.APP_ID_FRANK || vars.APP_ID_REVIEWER || vars.APP_ID }}
-        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        uses: 'actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510' # ratchet:actions/create-github-app-token@v2
         with:
           app-id: '${{ vars.APP_ID_FRANK || vars.APP_ID_REVIEWER || vars.APP_ID }}'
           private-key: '${{ secrets.APP_PRIVATE_KEY_FRANK || secrets.APP_PRIVATE_KEY_REVIEWER || secrets.APP_PRIVATE_KEY }}'
@@ -64,7 +64,7 @@ jobs:
       # 而 checkout 之前工作区是空的，node 直接报 Cannot find module。
       # 所以这一步无条件执行（原先靠 context 的 skip 输出裁掉它，那是个循环依赖）。
       - name: 'Checkout repository'
-        uses: 'actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8' # ratchet:actions/checkout@v5
+        uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' # ratchet:actions/checkout@v5
 
       - name: 'Inspect the pull request'
         id: 'context'
