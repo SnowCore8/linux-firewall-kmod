@@ -120,6 +120,9 @@ function batchResultNode(res: BatchOperationResponse): ReactNode {
 /** SSE bans 帧驱动重取的最短间隔（ms）：突发时前沿立即取、尾沿补一次，中间高频帧丢弃。 */
 const SSE_REFETCH_MIN_MS = 2000
 
+/** SSE 非 open 时（limit/exhausted/reconnecting 等）的 REST 兜底轮询间隔（ms）。 */
+const SSE_DEGRADED_POLL_MS = 30_000
+
 /**
  * 「剩余」单元：remaining_seconds 是取数时刻的快照，本地按墙钟每秒扣减。
  * 自持 1s 定时器，永久封禁或倒计时归零后停表——把每秒重渲染收敛到单个单元，
@@ -170,8 +173,12 @@ export default function Bans() {
   const [pageSize, setPageSize] = useState(20)
   const [sortBy, setSortBy] = useState<BanSortKey>('banned_at_desc')
 
-  const query = useAsync((signal) =>
-    getBans({ page, page_size: pageSize, sort_by: sortBy }, signal),
+  // 实时流 open 时由 bans 帧驱动刷新（上方的节流重取）；limit/exhausted/reconnecting 等
+  // 非 open 状态没有帧可等，按 30s 轮询兜底，与 AppShell「已降级为 REST 轮询」的提示一致。
+  // open 时 refreshInterval=0，只剩 SSE，避免轮询与帧刷新重复请求。
+  const query = useAsync(
+    (signal) => getBans({ page, page_size: pageSize, sort_by: sortBy }, signal),
+    { refreshInterval: sseState === 'open' ? 0 : SSE_DEGRADED_POLL_MS },
   )
 
   // refetch 存进 ref：让列定义、SSE 帧、深链处理等长活回调不必依赖其身份

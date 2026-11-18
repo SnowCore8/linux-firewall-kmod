@@ -15,6 +15,7 @@ import {
   AUTH_LOCKOUT_SECONDS,
   clearAccessToken,
   encodeBasic,
+  getAccessToken,
   hasAccessToken,
   setAccessToken,
 } from '../api/auth.ts'
@@ -67,6 +68,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const lockoutRemainingRef = useRef(0)
   lockoutRemainingRef.current = lockoutRemaining
   const lockoutTimerRef = useRef<number | null>(null)
+  /** 启动探测只跑一次：登录也会把 status 置成 authenticating，不能靠 status 区分两者。 */
+  const bootstrappedRef = useRef(false)
+  /** 认证代次：登录/登出让过期探测的结果作废，迟到的 probeAuth 不得改写新状态。 */
+  const authAttemptRef = useRef(0)
 
   const clearLockoutTimer = useCallback(() => {
     if (lockoutTimerRef.current !== null) {
@@ -93,26 +98,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, 1000)
   }, [clearLockoutTimer])
 
-  // 初始令牌探测：localStorage 中存在令牌时先验证有效性，过期则直接标 unauthenticated，
-  // 避免受保护内容在探测完成前闪现
+  // 启动令牌探测：仅在挂载时跑一次，验证 localStorage 里已有的令牌。
+  // 登录同样会把 status 置成 authenticating，所以这里不能依赖 [status]——否则每次登录都会
+  // 再发一次 probeAuth，且旧探测的失败会覆盖登录刚写入的新令牌。
   useEffect(() => {
-    if (status !== 'authenticating') return
-    const token = localStorage.getItem(ACCESS_TOKEN_KEY)
+    if (bootstrappedRef.current) return
+    bootstrappedRef.current = true
+    const token = getAccessToken()
     if (!token) {
       setStatus('unauthenticated')
       return
     }
+    const attempt = authAttemptRef.current
     probeAuth()
-      .then(() => setStatus('authenticated'))
-      .catch(() => {
-        clearAccessToken()
+      .then(() => {
+        // 过期探测：登录/登出已换过代次或令牌——结果一律丢弃
+        if (attempt !== authAttemptRef.current || getAccessToken() !== token) return
+        setStatus('authenticated')
+      })
+      .catch((err: unknown) => {
+        if (attempt !== authAttemptRef.current || getAccessToken() !== token) return
+        // 只有凭据确实无效（401）才清令牌；断网/5xx 保留令牌，刷新页面即可重试
+        if (err instanceof ApiError && err.isUnauthorized) clearAccessToken()
         setStatus('unauthenticated')
       })
-  }, [status])
+  }, [])
 
-  // 401 自动登出：任何在途请求收到 401 都会广播到这里
+  // 401 自动登出：任何在途请求收到 401 都会广播到这里。
+  // 只处理「当前令牌」的 401——旧探测迟到时携带的是旧令牌，直接清空会误删登录刚写入的新令牌。
   useEffect(() => {
-    return onUnauthorized(() => {
+    return onUnauthorized((failedToken) => {
+      if (failedToken !== getAccessToken()) return
       clearAccessToken()
       setStatus('unauthenticated')
     })
@@ -141,6 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setError(`登录已被锁定，请在 ${lockoutRemainingRef.current} 秒后重试`)
         return false
       }
+      const attempt = ++authAttemptRef.current
       setIsLoggingIn(true)
       setError(null)
       setStatus('authenticating')
@@ -150,14 +167,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         await probeAuth()
+        // 过期登录结果：更新的登录已开始，或令牌已被清掉——不要改写状态
+        if (attempt !== authAttemptRef.current || getAccessToken() !== token) return false
         setAccessToken(token)
         setFailCount(0)
         setStatus('authenticated')
         return true
       } catch (err) {
-        // 探测失败：清掉刚写的令牌
-        clearAccessToken()
+        if (attempt !== authAttemptRef.current) return false
+        // 仅凭据错误（401）清掉刚写的令牌；网络/服务端错误保留令牌，用户可直接重试
         if (err instanceof ApiError && err.isUnauthorized) {
+          clearAccessToken()
           // 仅凭据错误（401）计入失败次数；网络/服务端错误不推进锁定计数，
           // 免得断网时把账号「越试越接近锁定」
           const next = failCountRef.current + 1
@@ -181,13 +201,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setStatus('unauthenticated')
         return false
       } finally {
-        setIsLoggingIn(false)
+        // 过期登录的收尾不能把新登录的 loading 状态提前关掉
+        if (attempt === authAttemptRef.current) setIsLoggingIn(false)
       }
     },
     [startLockout],
   )
 
   const logout = useCallback(() => {
+    authAttemptRef.current += 1
     clearAccessToken()
     setFailCount(0)
     setError(null)

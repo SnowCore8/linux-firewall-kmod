@@ -164,6 +164,15 @@ function fmtScore(value: number): string {
 }
 
 /**
+ * 攻击预测的剩余时间：remaining_secs 为负表示预测时刻已过（后端保留该估计，见
+ * analysis_payload.go 对 AttackPrediction 的注释），读成「已逾期」而不是「永久」。
+ * 不能复用一个全局的负值语义——formatDuration 里负数代表永久封禁。
+ */
+function formatPredictionRemaining(seconds: number): string {
+  return seconds < 0 ? '已逾期' : formatDuration(seconds)
+}
+
+/**
  * 信誉分配色。假设后端口径为 0–100（越高越可疑）；口径未知时数值仍原样展示，仅配色偏保守。
  * 返回 CSS 颜色变量，供内联 style 使用。
  */
@@ -620,7 +629,7 @@ function PredictionSection({ result, onOpenIp }: PredictionSectionProps) {
         dataIndex: 'remaining_secs',
         key: 'remaining_secs',
         width: 110,
-        render: (n: number) => <span className="fw-mono">{formatDuration(n)}</span>,
+        render: (n: number) => <span className="fw-mono">{formatPredictionRemaining(n)}</span>,
       },
     ],
     [onOpenIp],
@@ -790,17 +799,22 @@ function PeriodicSection({ result, onOpenIp }: PeriodicSectionProps) {
         dataIndex: 'periodicity_score',
         key: 'periodicity_score',
         width: 160,
-        render: (n: number) => (
-          <Flex align="center" gap={8}>
-            <Progress
-              percent={Math.round(Math.max(0, Math.min(1, n)) * 100)}
-              size="small"
-              showInfo={false}
-              style={{ width: 80, margin: 0 }}
-            />
-            <span className="fw-mono">{fmtScore(n)}</span>
-          </Flex>
-        ),
+        render: (n: number) => {
+          // periodicity_score 是 0-100 百分数（contract/http.fwidl 的 PeriodicAttacker），
+          // 不是 0-1 归一值；进度条与文本都按同一口径钳制到 0-100。
+          const percent = Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0
+          return (
+            <Flex align="center" gap={8}>
+              <Progress
+                percent={Math.round(percent)}
+                size="small"
+                showInfo={false}
+                style={{ width: 80, margin: 0 }}
+              />
+              <span className="fw-mono">{formatPercent(percent)}</span>
+            </Flex>
+          )
+        },
       },
     ],
     [onOpenIp],
@@ -1529,7 +1543,11 @@ function IpAnalysisDrawer({ ip, onClose }: IpAnalysisDrawerProps) {
         label: '最近封禁',
         children: <span className="fw-mono">{formatDatetime(p.last_ban_at)}</span>,
       },
-      { key: 'remaining_secs', label: '剩余时间', children: formatDuration(p.remaining_secs) },
+      {
+        key: 'remaining_secs',
+        label: '剩余时间',
+        children: formatPredictionRemaining(p.remaining_secs),
+      },
       { key: 'median_interval_secs', label: '中位间隔', children: formatDuration(p.median_interval_secs) },
       { key: 'ban_count', label: '累计封禁', children: formatNumber(p.ban_count) },
       { key: 'jail_name', label: '来源 Jail', children: p.jail_name || '—' },

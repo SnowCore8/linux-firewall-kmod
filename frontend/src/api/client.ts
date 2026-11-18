@@ -16,7 +16,7 @@
  * 客户端只认「一个已经拼好的路径」，与具体路由解耦。
  */
 
-import { authorizationHeader } from './auth'
+import { authorizationHeader, getAccessToken } from './auth'
 import type { ApiResponse } from './types'
 
 /** 失败的种类；视图据此选择文案与重试策略。 */
@@ -57,19 +57,22 @@ export class ApiError extends Error {
 
 // --- 401 广播：AuthProvider 订阅后自动登出 -----------------------------------
 
-type UnauthorizedListener = () => void
+type UnauthorizedListener = (failedToken: string | null) => void
 const unauthorizedListeners = new Set<UnauthorizedListener>()
 
-/** 订阅「收到 401」事件；返回取消订阅函数。 */
+/**
+ * 订阅「收到 401」事件；回调拿到**这次请求实际使用的**令牌（无令牌为 null）。
+ * 调用方据此忽略旧请求迟到的 401，避免清掉之后写入的新令牌。
+ */
 export function onUnauthorized(listener: UnauthorizedListener): () => void {
   unauthorizedListeners.add(listener)
   return () => unauthorizedListeners.delete(listener)
 }
 
-function emitUnauthorized(): void {
+function emitUnauthorized(failedToken: string | null): void {
   for (const listener of unauthorizedListeners) {
     try {
-      listener()
+      listener(failedToken)
     } catch {
       // 单个监听器异常不影响其他监听器接收 401 通知
     }
@@ -134,16 +137,21 @@ async function doFetch(url: string, opts: ApiRequestOptions): Promise<Response> 
 
   const headers: Record<string, string> = {}
   const auth = authorizationHeader()
+  const requestToken = getAccessToken()
   if (auth) headers.Authorization = auth
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
 
   try {
-    return await fetch(url, {
+    const res = await fetch(url, {
       method,
       headers,
       body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
       signal: controller.signal,
     })
+    // 401 广播必须在拿到响应的这一刻发出，并带上本次请求的令牌：AuthProvider 只理会
+    // 「当前令牌」的 401，旧请求迟到时不得清掉登录刚写入的新令牌
+    if (res.status === 401) emitUnauthorized(requestToken)
+    return res
   } catch (err) {
     if (timedOut) {
       throw new ApiError('timeout', `请求超时（${timeoutMs}ms）：${url}`)
@@ -174,13 +182,12 @@ function expectJsonContainer<T>(value: unknown, status: number, path: string): T
 
 /**
  * 信封端点：解 `{code,data,message}`，成功回 data，失败按种类抛 ApiError。
- * 401 走纯文本分支并广播；其余非 2xx 若带合法信封则按业务码归类。
+ * 401 走纯文本分支（广播已在 doFetch 按请求令牌发出）；其余非 2xx 若带合法信封则按业务码归类。
  */
 export async function apiFetch<T>(path: string, opts: ApiRequestOptions = {}): Promise<T> {
   const res = await doFetch(buildUrl(path, opts.query), opts)
 
   if (res.status === 401) {
-    emitUnauthorized()
     // 401 是纯文本（如 "Unauthorized\n"），读出来当 message，不按信封解析
     const text = (await res.text().catch(() => '')).trim()
     throw new ApiError('unauthorized', text || '未认证或凭据无效', 401)

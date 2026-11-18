@@ -197,7 +197,9 @@ function buildDiff(values: SettingsFormValues, base: WebuiConfigResponse): Updat
     if (values[key] !== base[key]) diff[key] = values[key]
   }
   const clearAt = values.clear_logs_at ? values.clear_logs_at.format('HH:mm') : null
-  if (clearAt !== normalizeHHmm(base.clear_logs_at)) diff.clear_logs_at = clearAt
+  // 清空过滤要提交空串：后端用 *string 区分「字段缺席」与「显式取消」，JSON null 与缺席
+  // 同义，会被当成「不修改」，旧时间因此在回填后原样出现。
+  if (clearAt !== normalizeHHmm(base.clear_logs_at)) diff.clear_logs_at = clearAt ?? ''
   return diff
 }
 
