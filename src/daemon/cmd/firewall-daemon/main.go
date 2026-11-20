@@ -101,7 +101,11 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("初始化信号层失败: %w", err)
 	}
-	defer signals.Close()
+	defer func() {
+		if err := signals.Close(); err != nil {
+			logger.Error("failed to close signal handler", "error", err)
+		}
+	}()
 
 	// startedAt 是进程开始装配的时刻：GET /api/v2/stats 的 uptime_seconds 从这里起算，
 	// 而不是 HTTP 服务器构造时刻——读配置、开历史库这些时间也算「启动了多久」。
@@ -153,7 +157,11 @@ func run(args []string) error {
 			logger.Warn("GeoIP 数据库加载失败，攻击源地理分布不可用", "path", cfg.GeoipDBPath, "error", gerr)
 		} else {
 			geoReader = reader
-			defer reader.Close()
+			defer func() {
+				if err := reader.Close(); err != nil {
+					logger.Error("failed to close GeoIP database", "error", err)
+				}
+			}()
 			logger.Info("GeoIP 数据库已加载", "path", cfg.GeoipDBPath)
 		}
 	}
@@ -247,7 +255,11 @@ func run(args []string) error {
 		if err != nil {
 			logger.Warn("初始化持久化数据库失败，历史分析功能不可用", "error", err)
 		} else {
-			defer db.Close()
+			defer func() {
+				if err := db.Close(); err != nil {
+					logger.Error("failed to close database", "error", err)
+				}
+			}()
 			dbStopCh := make(chan struct{})
 			cleanupDone := db.StartCleanupScheduler(0, cfg.HistoryRetentionDays, dbStopCh)
 			recoveryDone := db.StartReputationRecoveryScheduler(0, 1, 100, dbStopCh)
@@ -298,7 +310,11 @@ func run(args []string) error {
 			logger.Warn("订阅内核 netlink 接收链路失败", "error", serr)
 			transport.Close()
 		} else {
-			defer transport.Close()
+			defer func() {
+				if err := transport.Close(); err != nil {
+					logger.Error("failed to close transport", "error", err)
+				}
+			}()
 			// 健康计数必须在接收回路启动前接好：Send/TryRecv 在热路径上直接读这些句柄，
 			// 且此后再不改写。
 			transport.SetMetrics(kernelMetrics{m: metrics})

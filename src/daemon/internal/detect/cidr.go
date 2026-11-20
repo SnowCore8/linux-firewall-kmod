@@ -94,7 +94,7 @@ func ParseCidrKey(text string) (CidrKey, error) {
 func MustCidrKey(text string) CidrKey {
 	k, err := ParseCidrKey(text)
 	if err != nil {
-		panic("非法 CIDR 文本: " + text + ": " + err.Error())
+		panic("invalid CIDR text: " + text + ": " + err.Error())
 	}
 	return k
 }
@@ -130,7 +130,7 @@ func (k CidrKey) Prefix() netip.Prefix {
 	p, err := netip.ParsePrefix(k.key)
 	if err != nil {
 		// 键只可能由本包构造，故此处不可达；panic 而非返回零值，避免静默产出错误数据。
-		panic("CidrKey 内部文本非法: " + k.key)
+		panic("CidrKey internal text malformed: " + k.key)
 	}
 	return p
 }

@@ -90,7 +90,11 @@ const errorBackoff = 100 * time.Millisecond
 // 顺序要紧：Router.Close 内部先置死（此后新登记被拒）再清表（释放已等待的请求），
 // 否则「置死与清表之间」到达的登记会插进空表然后干等。
 func (r *Reactor) Run() {
-	defer r.router.Close()
+	defer func() {
+		if err := r.router.Close(); err != nil {
+			r.logger.Error("failed to close router", "error", err)
+		}
+	}()
 
 	for !r.shutdown.IsShutdown() {
 		ready, err := r.transport.Poll(PollInterval, EventRx|EventLinkDown)
