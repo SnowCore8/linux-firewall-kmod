@@ -50,7 +50,7 @@ func Spawn(pidFile string) error {
 		return nil
 	}
 	if err := WritePIDFile(pidFile, proc.Pid); err != nil {
-		return fmt.Errorf("子进程已启动（pid %d）但写 pid 文件失败: %w", proc.Pid, err)
+		return fmt.Errorf("child process started (pid %d) but failed to write pid file: %w", proc.Pid, err)
 	}
 	return nil
 }
@@ -80,7 +80,7 @@ func childEnv(environ []string) []string {
 // 第二实例；内容无法解析或进程已不存在视为陈旧记录，直接覆盖。
 func WritePIDFile(path string, pid int) error {
 	if old, ok := readPIDFile(path); ok && processAlive(old) {
-		return fmt.Errorf("pid 文件 %s 已被存活进程 %d 占用，拒绝启动第二实例", path, old)
+		return fmt.Errorf("pid file %s already held by live process %d, refusing second instance", path, old)
 	}
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp*")
 	if err != nil {

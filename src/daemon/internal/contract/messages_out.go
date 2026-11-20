@@ -28,7 +28,7 @@ func (m *BanIp) Decode(b []byte) error {
 	}
 	size := wireLayouts["BanIp"].size
 	if len(b) != size {
-		return fmt.Errorf("BanIp 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("BanIp length %d should be %d", len(b), size)
 	}
 	o := offBanIp
 	m.AF = AddrFamily(getU8(b, o["af"]))
@@ -72,7 +72,7 @@ func (m *UnbanIp) Decode(b []byte) error {
 	}
 	size := wireLayouts["UnbanIp"].size
 	if len(b) != size {
-		return fmt.Errorf("UnbanIp 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("UnbanIp length %d should be %d", len(b), size)
 	}
 	o := offBanIp
 	m.AF = AddrFamily(getU8(b, o["af"]))
@@ -109,7 +109,7 @@ func (m *SetConfig) Decode(b []byte) error {
 	}
 	size := wireLayouts["SetConfig"].size
 	if len(b) != size {
-		return fmt.Errorf("SetConfig 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("SetConfig length %d should be %d", len(b), size)
 	}
 	m.ConfigPayload = decodeConfigPayload(b)
 	return nil
@@ -139,7 +139,7 @@ func (m *ConfigChange) Decode(b []byte) error {
 	}
 	size := wireLayouts["ConfigChange"].size
 	if len(b) != size {
-		return fmt.Errorf("ConfigChange 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("ConfigChange length %d should be %d", len(b), size)
 	}
 	m.ConfigPayload = decodeConfigPayload(b)
 	return nil
@@ -186,7 +186,7 @@ func (m *SetProtectedPorts) Decode(b []byte) error {
 	}
 	size := wireLayouts["SetProtectedPorts"].size
 	if len(b) != size {
-		return fmt.Errorf("SetProtectedPorts 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("SetProtectedPorts length %d should be %d", len(b), size)
 	}
 	o := offSetProtectedPorts
 	m.Count = getU32(b, o["count"])
@@ -222,7 +222,7 @@ func (m *ListBansQuery) Decode(b []byte) error {
 		return fmt.Errorf("期望 ListBansQuery(%d)，实际 %d", MsgListBansQuery, h.MsgType)
 	}
 	if len(b) != wireLayouts["ListBansQuery"].size {
-		return fmt.Errorf("ListBansQuery 长度 %d 应为 %d", len(b), wireLayouts["ListBansQuery"].size)
+		return fmt.Errorf("ListBansQuery length %d should be %d", len(b), wireLayouts["ListBansQuery"].size)
 	}
 	o := offListBansQuery
 	m.Offset = getU32(b, o["offset"])
@@ -256,7 +256,7 @@ func (m *ListWhitelistQuery) Decode(b []byte) error {
 		return fmt.Errorf("期望 ListWhitelistQuery(%d)，实际 %d", MsgListWhitelistQuery, h.MsgType)
 	}
 	if len(b) != wireLayouts["ListWhitelistQuery"].size {
-		return fmt.Errorf("ListWhitelistQuery 长度 %d 应为 %d", len(b), wireLayouts["ListWhitelistQuery"].size)
+		return fmt.Errorf("ListWhitelistQuery length %d should be %d", len(b), wireLayouts["ListWhitelistQuery"].size)
 	}
 	o := offListBansQuery
 	m.Offset = getU32(b, o["offset"])
@@ -290,7 +290,7 @@ func (m *ListRatesQuery) Decode(b []byte) error {
 		return fmt.Errorf("期望 ListRatesQuery(%d)，实际 %d", MsgListRatesQuery, h.MsgType)
 	}
 	if len(b) != wireLayouts["ListRatesQuery"].size {
-		return fmt.Errorf("ListRatesQuery 长度 %d 应为 %d", len(b), wireLayouts["ListRatesQuery"].size)
+		return fmt.Errorf("ListRatesQuery length %d should be %d", len(b), wireLayouts["ListRatesQuery"].size)
 	}
 	o := offListBansQuery
 	m.Offset = getU32(b, o["offset"])
@@ -329,7 +329,7 @@ func (m *AddWhitelist) Decode(b []byte) error {
 	}
 	size := wireLayouts["AddWhitelist"].size
 	if len(b) != size {
-		return fmt.Errorf("AddWhitelist 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("AddWhitelist length %d should be %d", len(b), size)
 	}
 	o := offAddWhitelist
 	m.AF = AddrFamily(getU8(b, o["af"]))
@@ -372,7 +372,7 @@ func (m *RemoveWhitelist) Decode(b []byte) error {
 	}
 	size := wireLayouts["RemoveWhitelist"].size
 	if len(b) != size {
-		return fmt.Errorf("RemoveWhitelist 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("RemoveWhitelist length %d should be %d", len(b), size)
 	}
 	o := offAddWhitelist
 	m.AF = AddrFamily(getU8(b, o["af"]))
@@ -422,7 +422,7 @@ func DecodeHeaderOnly(b []byte, want MsgType) (Header, error) {
 		return Header{}, fmt.Errorf("期望消息类型 %d，实际 %d", want, h.MsgType)
 	}
 	if len(b) != HdrLen {
-		return Header{}, fmt.Errorf("该消息应为 %d 字节（仅头），实际 %d", HdrLen, len(b))
+		return Header{}, fmt.Errorf("message should be %d bytes (header only), got %d", HdrLen, len(b))
 	}
 	return h, nil
 }

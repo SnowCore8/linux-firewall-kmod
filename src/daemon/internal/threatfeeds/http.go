@@ -49,7 +49,7 @@ func NewHTTPClient(timeout time.Duration, maxRetries int) *HTTPClient {
 		}
 		// 只连已校验过的地址；逐个尝试，首个地址暂时不可达不应让整轮拉取失败。
 		if len(candidates) == 0 {
-			return nil, fmt.Errorf("没有可连接的情报源地址")
+			return nil, fmt.Errorf("no connectable feed source addresses")
 		}
 		var lastErr error
 		for _, candidate := range candidates {
@@ -96,12 +96,12 @@ func dialTargets(host string, ips []net.IPAddr, port string) ([]string, error) {
 			continue
 		}
 		if isPrivateAddr(addr) {
-			return nil, fmt.Errorf("DNS 解析到私有地址 %s，拒绝连接（SSRF 防护）", ip.IP)
+			return nil, fmt.Errorf("DNS resolved to private address %s, refusing connection (SSRF protection)", ip.IP)
 		}
 		targets = append(targets, net.JoinHostPort(addr.Unmap().String(), port))
 	}
 	if len(targets) == 0 {
-		return nil, fmt.Errorf("DNS 解析 %s 未返回可用地址", host)
+		return nil, fmt.Errorf("DNS resolution for %s returned no usable addresses", host)
 	}
 	return targets, nil
 }
@@ -213,10 +213,10 @@ func (c *HTTPClient) fetchOnce(ctx context.Context, u *url.URL) ([]byte, error) 
 	limited := io.LimitReader(resp.Body, maxFeedResponseBytes+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, fmt.Errorf("读取响应体失败: %w", err)
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 	if int64(len(data)) > maxFeedResponseBytes {
-		return nil, fmt.Errorf("响应体超过 %d MiB 上限", maxFeedResponseBytes>>20)
+		return nil, fmt.Errorf("response body exceeds %d MiB limit", maxFeedResponseBytes>>20)
 	}
 	return data, nil
 }

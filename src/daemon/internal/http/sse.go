@@ -347,7 +347,7 @@ func (c *sseConn) writeFrame(event string, data any) (err error) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("SSE 客户端通道已关闭")
+			err = fmt.Errorf("SSE client channel is closed")
 		}
 	}()
 	select {

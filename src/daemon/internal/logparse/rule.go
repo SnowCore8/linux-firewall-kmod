@@ -176,7 +176,7 @@ func ValidateRegexSafety(jailName, pattern string) error {
 	}
 
 	if strings.Contains(pattern, "++") || strings.Contains(pattern, "*+") {
-		return fmt.Errorf("jail '%s' 的正则含占有量词（++ / *+）", jailName)
+		return fmt.Errorf("jail '%s' regex contains possessive quantifier (++ / *+)", jailName)
 	}
 
 	// 第二检查：`(?` 后直接跟量词属非法组合。合法的 `(?...)` 包括非捕获组 `(?:`、

@@ -24,10 +24,10 @@ func (m *DdosEvent) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgDdosEvent {
-		return fmt.Errorf("期望 DdosEvent(%d)，实际 %d", MsgDdosEvent, h.MsgType)
+		return fmt.Errorf("expected DdosEvent(%d), got %d", MsgDdosEvent, h.MsgType)
 	}
 	if len(b) != wireLayouts["DdosEvent"].size {
-		return fmt.Errorf("DdosEvent 长度 %d 应为 %d", len(b), wireLayouts["DdosEvent"].size)
+		return fmt.Errorf("DdosEvent length %d should be %d", len(b), wireLayouts["DdosEvent"].size)
 	}
 	o := offDdosEvent
 	m.AF = AddrFamily(getU8(b, o["af"]))
@@ -82,11 +82,11 @@ func (m *BanStateChange) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgBanStateChange {
-		return fmt.Errorf("期望 BanStateChange(%d)，实际 %d", MsgBanStateChange, h.MsgType)
+		return fmt.Errorf("expected BanStateChange(%d), got %d", MsgBanStateChange, h.MsgType)
 	}
 	size := wireLayouts["BanStateChange"].size
 	if len(b) != size {
-		return fmt.Errorf("BanStateChange 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("BanStateChange length %d should be %d", len(b), size)
 	}
 	o := offBanStateChange
 	m.Action = BanAction(getU8(b, o["action"]))
@@ -148,11 +148,11 @@ func (m *WhitelistStateChange) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgWhitelistStateChange {
-		return fmt.Errorf("期望 WhitelistStateChange(%d)，实际 %d", MsgWhitelistStateChange, h.MsgType)
+		return fmt.Errorf("expected WhitelistStateChange(%d), got %d", MsgWhitelistStateChange, h.MsgType)
 	}
 	size := wireLayouts["WhitelistStateChange"].size
 	if len(b) != size {
-		return fmt.Errorf("WhitelistStateChange 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("WhitelistStateChange length %d should be %d", len(b), size)
 	}
 	o := offWhitelistStateChange
 	m.Action = WhitelistAction(getU8(b, o["action"]))
@@ -199,11 +199,11 @@ func (m *CmdResult) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgCmdResult {
-		return fmt.Errorf("期望 CmdResult(%d)，实际 %d", MsgCmdResult, h.MsgType)
+		return fmt.Errorf("expected CmdResult(%d), got %d", MsgCmdResult, h.MsgType)
 	}
 	size := wireLayouts["CmdResult"].size
 	if len(b) != size {
-		return fmt.Errorf("CmdResult 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("CmdResult length %d should be %d", len(b), size)
 	}
 	o := offCmdResult
 	m.OriginalCmd = MsgType(getU16(b, o["original_cmd"]))
@@ -241,11 +241,11 @@ func (m *ConfigAck) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgConfigAck {
-		return fmt.Errorf("期望 ConfigAck(%d)，实际 %d", MsgConfigAck, h.MsgType)
+		return fmt.Errorf("expected ConfigAck(%d), got %d", MsgConfigAck, h.MsgType)
 	}
 	size := wireLayouts["ConfigAck"].size
 	if len(b) != size {
-		return fmt.Errorf("ConfigAck 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("ConfigAck length %d should be %d", len(b), size)
 	}
 	o := offConfigAck
 	m.AppliedFlags = ConfigFlags(getU32(b, o["applied_flags"]))
@@ -408,12 +408,12 @@ func (m *ListBansResponse) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgListBansResponse {
-		return fmt.Errorf("期望 ListBansResponse(%d)，实际 %d", MsgListBansResponse, h.MsgType)
+		return fmt.Errorf("expected ListBansResponse(%d), got %d", MsgListBansResponse, h.MsgType)
 	}
 	fixed := wireLayouts["ListBansResponse"].size
 	elem := wireLayouts["BanEntry"].size
 	if len(b) < fixed {
-		return fmt.Errorf("ListBansResponse 长度 %d 短于定长部分 %d", len(b), fixed)
+		return fmt.Errorf("ListBansResponse length %d shorter than fixed part %d", len(b), fixed)
 	}
 	o := offListBansResponse
 	m.Count = getU32(b, o["count"])
@@ -425,7 +425,7 @@ func (m *ListBansResponse) Decode(b []byte) error {
 	}
 	n := rest / elem
 	if uint32(n) != m.Count {
-		return fmt.Errorf("ListBansResponse count=%d 与尾部实际条目数 %d 不符", m.Count, n)
+		return fmt.Errorf("ListBansResponse count=%d does not match actual trailing entries %d", m.Count, n)
 	}
 	m.Entries = make([]BanEntry, n)
 	for i := 0; i < n; i++ {
@@ -482,11 +482,11 @@ func (m *StatsResponse) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgStatsResponse {
-		return fmt.Errorf("期望 StatsResponse(%d)，实际 %d", MsgStatsResponse, h.MsgType)
+		return fmt.Errorf("expected StatsResponse(%d), got %d", MsgStatsResponse, h.MsgType)
 	}
 	size := wireLayouts["StatsResponse"].size
 	if len(b) != size {
-		return fmt.Errorf("StatsResponse 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("StatsResponse length %d should be %d", len(b), size)
 	}
 	o := offStatsResponse
 	m.CurrentBans = getU64(b, o["current_bans"])
@@ -566,12 +566,12 @@ func (m *ListWhitelistResponse) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgListWhitelistResponse {
-		return fmt.Errorf("期望 ListWhitelistResponse(%d)，实际 %d", MsgListWhitelistResponse, h.MsgType)
+		return fmt.Errorf("expected ListWhitelistResponse(%d), got %d", MsgListWhitelistResponse, h.MsgType)
 	}
 	fixed := wireLayouts["ListWhitelistResponse"].size
 	elem := wireLayouts["WhitelistEntry"].size
 	if len(b) < fixed {
-		return fmt.Errorf("ListWhitelistResponse 长度 %d 短于定长部分 %d", len(b), fixed)
+		return fmt.Errorf("ListWhitelistResponse length %d shorter than fixed part %d", len(b), fixed)
 	}
 	o := offListWhitelistResponse
 	m.Count = getU32(b, o["count"])
@@ -583,7 +583,7 @@ func (m *ListWhitelistResponse) Decode(b []byte) error {
 	}
 	n := rest / elem
 	if uint32(n) != m.Count {
-		return fmt.Errorf("ListWhitelistResponse count=%d 与尾部实际条目数 %d 不符", m.Count, n)
+		return fmt.Errorf("ListWhitelistResponse count=%d does not match actual trailing entries %d", m.Count, n)
 	}
 	m.Entries = make([]WhitelistEntry, n)
 	for i := 0; i < n; i++ {
@@ -694,12 +694,12 @@ func (m *ListRatesResponse) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgListRatesResponse {
-		return fmt.Errorf("期望 ListRatesResponse(%d)，实际 %d", MsgListRatesResponse, h.MsgType)
+		return fmt.Errorf("expected ListRatesResponse(%d), got %d", MsgListRatesResponse, h.MsgType)
 	}
 	fixed := wireLayouts["ListRatesResponse"].size
 	elem := wireLayouts["RateEntry"].size
 	if len(b) < fixed {
-		return fmt.Errorf("ListRatesResponse 长度 %d 短于定长部分 %d", len(b), fixed)
+		return fmt.Errorf("ListRatesResponse length %d shorter than fixed part %d", len(b), fixed)
 	}
 	o := offListRatesResponse
 	m.Count = getU32(b, o["count"])
@@ -713,7 +713,7 @@ func (m *ListRatesResponse) Decode(b []byte) error {
 	}
 	n := rest / elem
 	if uint32(n) != m.Count {
-		return fmt.Errorf("ListRatesResponse count=%d 与尾部实际条目数 %d 不符", m.Count, n)
+		return fmt.Errorf("ListRatesResponse count=%d does not match actual trailing entries %d", m.Count, n)
 	}
 	m.Entries = make([]RateEntry, n)
 	for i := 0; i < n; i++ {
@@ -845,11 +845,11 @@ func (m *AnalysisResponse) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgAnalysisResponse {
-		return fmt.Errorf("期望 AnalysisResponse(%d)，实际 %d", MsgAnalysisResponse, h.MsgType)
+		return fmt.Errorf("expected AnalysisResponse(%d), got %d", MsgAnalysisResponse, h.MsgType)
 	}
 	size := wireLayouts["AnalysisResponse"].size
 	if len(b) != size {
-		return fmt.Errorf("AnalysisResponse 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("AnalysisResponse length %d should be %d", len(b), size)
 	}
 	o := offAnalysisResponse
 	udpSize := wireLayouts["UdpPortItem"].size
@@ -966,11 +966,11 @@ func (m *DaemonRegisterAck) Decode(b []byte) error {
 		return err
 	}
 	if h.MsgType != MsgDaemonRegisterAck {
-		return fmt.Errorf("期望 DaemonRegisterAck(%d)，实际 %d", MsgDaemonRegisterAck, h.MsgType)
+		return fmt.Errorf("expected DaemonRegisterAck(%d), got %d", MsgDaemonRegisterAck, h.MsgType)
 	}
 	size := wireLayouts["DaemonRegisterAck"].size
 	if len(b) != size {
-		return fmt.Errorf("DaemonRegisterAck 长度 %d 应为 %d", len(b), size)
+		return fmt.Errorf("DaemonRegisterAck length %d should be %d", len(b), size)
 	}
 	m.Accepted = getU8(b, offDaemonRegisterAck["accepted"]) != 0
 	return nil

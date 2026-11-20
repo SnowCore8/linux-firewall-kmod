@@ -197,10 +197,10 @@ func checkYAMLAliasBomb(content string) error {
 		}
 	}
 	if aliases > maxAliasRefs {
-		return fmt.Errorf("YAML 别名引用数 %d 超过上限 %d，疑似别名展开攻击", aliases, maxAliasRefs)
+		return fmt.Errorf("YAML alias references %d exceed limit %d, possible alias bomb", aliases, maxAliasRefs)
 	}
 	if anchors > 0 && aliases > anchors*10 {
-		return fmt.Errorf("YAML 别名数 %d 远超锚点数 %d，疑似别名展开攻击", aliases, anchors)
+		return fmt.Errorf("YAML aliases %d far exceed anchors %d, possible alias bomb", aliases, anchors)
 	}
 	return nil
 }
@@ -553,7 +553,7 @@ func checkMaxRetriesCeiling(v uint32, key string) error {
 	if v <= maxRetriesCeiling {
 		return nil
 	}
-	return fmt.Errorf("%s=%d 超过上限 %d：单个 IP 只保留 %d 个失败时间戳，判定阈值还要叠加高峰期 +%d 与内网 +%d，更大的阈值在这两类来源上永远达不到",
+	return fmt.Errorf("%s=%d exceeds limit %d: each IP keeps at most %d failure timestamps; threshold also adds peak +%d and internal +%d; larger thresholds are unreachable for these sources",
 		key, v, maxRetriesCeiling, detect.MaxTimestampsPerIP, peakHoursAddend, internalSourceAddend)
 }
 
@@ -724,10 +724,10 @@ func applyWebui(yc *yamlConfig, cfg *Config) error {
 	setU64(&cfg.Webui.RateWarningSYN, w.RateWarningSYN)
 	setU64(&cfg.Webui.RateCriticalSYN, w.RateCriticalSYN)
 	if cfg.Webui.RateWarningPPS >= cfg.Webui.RateCriticalPPS {
-		return fmt.Errorf("webui.rate_warning_pps(%d) 必须小于 rate_critical_pps(%d)", cfg.Webui.RateWarningPPS, cfg.Webui.RateCriticalPPS)
+		return fmt.Errorf("webui.rate_warning_pps(%d) must be less than rate_critical_pps(%d)", cfg.Webui.RateWarningPPS, cfg.Webui.RateCriticalPPS)
 	}
 	if cfg.Webui.RateWarningSYN >= cfg.Webui.RateCriticalSYN {
-		return fmt.Errorf("webui.rate_warning_syn(%d) 必须小于 rate_critical_syn(%d)", cfg.Webui.RateWarningSYN, cfg.Webui.RateCriticalSYN)
+		return fmt.Errorf("webui.rate_warning_syn(%d) must be less than rate_critical_syn(%d)", cfg.Webui.RateWarningSYN, cfg.Webui.RateCriticalSYN)
 	}
 	if err := setU32Bounded(&cfg.Webui.MaxSynPerSecond, w.MaxSynPerSecond, 1, 10_000_000, "webui.max_syn_per_second"); err != nil {
 		return err
@@ -879,13 +879,13 @@ func ValidateThreatFeedURL(rawURL string) error {
 		return fmt.Errorf("URL 解析失败: %w", err)
 	}
 	if u.Scheme != "https" {
-		return fmt.Errorf("不支持的协议 %q，只允许 https", u.Scheme)
+		return fmt.Errorf("unsupported scheme %q, only https allowed", u.Scheme)
 	}
 	if u.Hostname() == "" {
 		return fmt.Errorf("URL 缺少主机名")
 	}
 	if !AllowedThreatFeedHost(u.Hostname()) {
-		return fmt.Errorf("域名不在情报源白名单中: %s", u.Hostname())
+		return fmt.Errorf("hostname not in threat feed allowlist: %s", u.Hostname())
 	}
 	return nil
 }
@@ -902,10 +902,10 @@ func applyRiskEngine(yc *yamlConfig, cfg *Config) error {
 	setBool(&cfg.RiskEngine.Enabled, re.Enabled)
 	if re.HalfLifeDays != nil {
 		if *re.HalfLifeDays <= 0 {
-			return fmt.Errorf("risk_engine.half_life_days 必须大于 0，实际是 %v", *re.HalfLifeDays)
+			return fmt.Errorf("risk_engine.half_life_days must be > 0, got %v", *re.HalfLifeDays)
 		}
 		if *re.HalfLifeDays > 365 {
-			return fmt.Errorf("risk_engine.half_life_days 不能超过 365（一年），实际是 %v", *re.HalfLifeDays)
+			return fmt.Errorf("risk_engine.half_life_days must be <= 365 (one year), got %v", *re.HalfLifeDays)
 		}
 		cfg.RiskEngine.HalfLifeDays = *re.HalfLifeDays
 	}
@@ -940,7 +940,7 @@ func applyGeoip(yc *yamlConfig, cfg *Config) error {
 		return err
 	}
 	if latSet != lonSet {
-		return fmt.Errorf("server_latitude 与 server_longitude 必须成对给出")
+		return fmt.Errorf("server_latitude and server_longitude must be provided together")
 	}
 	if latSet {
 		if lat < -90 || lat > 90 {
@@ -1026,7 +1026,7 @@ func normalizeProbeURL(raw string) (string, error) {
 	case strings.HasPrefix(lower, "http://"):
 		schemeLen = len("http://")
 	default:
-		return "", fmt.Errorf("geoip_egress_probe_url 必须以 http:// 或 https:// 开头: %q", url)
+		return "", fmt.Errorf("geoip_egress_probe_url must start with http:// or https://: %q", url)
 	}
 	host := url[schemeLen:]
 	if i := strings.IndexAny(host, "/?#"); i >= 0 {

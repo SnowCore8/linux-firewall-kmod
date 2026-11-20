@@ -104,7 +104,7 @@ func NewFeedManager(cfg Config) (*FeedManager, error) {
 	// 有配置却一个都没装配成功时仍按失败处理，让装配问题在启动日志里显性化
 	if len(mgr.sources) == 0 && len(unknown) > 0 {
 		cancel()
-		return nil, fmt.Errorf("没有任何可用的情报源，未知源配置: %v", unknown)
+		return nil, fmt.Errorf("no usable threat feeds, unknown source config: %v", unknown)
 	}
 
 	return mgr, nil

@@ -375,7 +375,7 @@ func (t *Transport) TryRecv() (Datagram, bool, error) {
 	}
 	if n < nlmsgHdrLen {
 		bumpCounter(t.recvErrorCounter)
-		return Datagram{}, false, fmt.Errorf("%w：实得 %d 字节，不足一个 nlmsghdr",
+		return Datagram{}, false, fmt.Errorf("%w: got %d bytes, not enough for nlmsghdr",
 			ErrMalformedDatagram, n)
 	}
 	nlmsgLen := int(getU32NE(buf[0:4]))

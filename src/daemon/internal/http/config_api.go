@@ -403,10 +403,10 @@ func validateWebui(w config.WebuiConfig) error {
 		return fmt.Errorf("sse_push_interval 必须在 1-60 之间，实际 %d", w.SSEPushInterval)
 	}
 	if w.RateWarningPPS >= w.RateCriticalPPS {
-		return fmt.Errorf("rate_warning_pps(%d) 必须小于 rate_critical_pps(%d)", w.RateWarningPPS, w.RateCriticalPPS)
+		return fmt.Errorf("rate_warning_pps(%d) must be less than rate_critical_pps(%d)", w.RateWarningPPS, w.RateCriticalPPS)
 	}
 	if w.RateWarningSYN >= w.RateCriticalSYN {
-		return fmt.Errorf("rate_warning_syn(%d) 必须小于 rate_critical_syn(%d)", w.RateWarningSYN, w.RateCriticalSYN)
+		return fmt.Errorf("rate_warning_syn(%d) must be less than rate_critical_syn(%d)", w.RateWarningSYN, w.RateCriticalSYN)
 	}
 	for _, f := range []struct {
 		name string

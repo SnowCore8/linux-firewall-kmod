@@ -461,7 +461,7 @@ func addrToWire(addr netip.Addr) (contract.AddrFamily, contract.Addr16, error) {
 		copy(a[:], v16[:])
 		return contract.AFInet6, a, nil
 	}
-	return 0, a, fmt.Errorf("不是有效的单播地址：%s", addr)
+	return 0, a, fmt.Errorf("not a valid unicast address: %s", addr)
 }
 
 // popcount8 统计一个字节中置位的个数。

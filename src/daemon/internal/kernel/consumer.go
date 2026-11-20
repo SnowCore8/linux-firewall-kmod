@@ -860,7 +860,7 @@ func addrFromWire(af contract.AddrFamily, a contract.Addr16) (netip.Addr, error)
 	case contract.AFInet6:
 		return netip.AddrFrom16(a).Unmap(), nil
 	default:
-		return netip.Addr{}, fmt.Errorf("未定义的地址族 %d", uint8(af))
+		return netip.Addr{}, fmt.Errorf("undefined address family %d", uint8(af))
 	}
 }
 

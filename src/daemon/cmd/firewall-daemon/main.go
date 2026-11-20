@@ -758,7 +758,7 @@ func loadConfig(parsed *config.ConfigArgs, cfg *config.Config) error {
 func checkProcfs() error {
 	for _, p := range procfsPaths {
 		if _, err := os.Stat(p); err != nil {
-			return fmt.Errorf("内核接口不可用: %s 不存在（内核模块未加载？）", p)
+			return fmt.Errorf("kernel interface unavailable: %s does not exist (kernel module not loaded?)", p)
 		}
 	}
 	return nil
@@ -786,7 +786,7 @@ func requestRollback() error {
 		fmt.Println("回滚完成")
 		return nil
 	}
-	return fmt.Errorf("未找到运行中的 firewall-daemon（请先以 -d 启动）")
+	return fmt.Errorf("no running firewall-daemon found (start with -d first)")
 }
 
 // pgrepSelf 返回命令行匹配 pattern 的进程 PID（不含调用者自身）。

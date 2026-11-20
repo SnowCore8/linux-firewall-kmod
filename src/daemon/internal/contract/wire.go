@@ -144,7 +144,7 @@ func Addr16FromIP(af AddrFamily, ip net.IP) (Addr16, error) {
 		}
 		copy(a[:], v16)
 	default:
-		return a, fmt.Errorf("未定义的地址族 %d", af)
+		return a, fmt.Errorf("undefined address family %d", af)
 	}
 	return a, nil
 }
@@ -157,7 +157,7 @@ func (a Addr16) IP(af AddrFamily) (net.IP, error) {
 	case AFInet6:
 		return net.IP(a[:]), nil
 	default:
-		return nil, fmt.Errorf("未定义的地址族 %d", af)
+		return nil, fmt.Errorf("undefined address family %d", af)
 	}
 }
 
@@ -174,7 +174,7 @@ type Header struct {
 // 导出供接收路径复用：公共头的校验规则属于契约，任何调用方都不得另写一份。
 func ParseHeader(b []byte) (Header, error) {
 	if len(b) < HdrLen {
-		return Header{}, fmt.Errorf("报文短于公共头：%d < %d", len(b), HdrLen)
+		return Header{}, fmt.Errorf("message shorter than common header: %d < %d", len(b), HdrLen)
 	}
 	if m := binary.BigEndian.Uint32(b[0:4]); m != Magic {
 		return Header{}, fmt.Errorf("魔数不匹配：0x%08X", m)
@@ -185,7 +185,7 @@ func ParseHeader(b []byte) (Header, error) {
 		Seq:     binary.BigEndian.Uint32(b[8:12]),
 	}
 	if int(h.MsgLen) != len(b) {
-		return Header{}, fmt.Errorf("msg_len=%d 与实际长度 %d 不符", h.MsgLen, len(b))
+		return Header{}, fmt.Errorf("msg_len=%d does not match actual length %d", h.MsgLen, len(b))
 	}
 	return h, nil
 }

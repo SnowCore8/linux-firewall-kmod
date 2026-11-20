@@ -101,7 +101,7 @@ func decodeIncoming(msgType contract.MsgType, payload []byte) (Incoming, error) 
 // 契约要求 msg_len 恒为「含头的总长度」，静默接受截断会把错位字段读成合法值。
 func decodeHeader(payload []byte) (contract.Header, error) {
 	if len(payload) < contract.HdrLen {
-		return contract.Header{}, fmt.Errorf("载荷短于公共头：%d < %d", len(payload), contract.HdrLen)
+		return contract.Header{}, fmt.Errorf("payload shorter than common header: %d < %d", len(payload), contract.HdrLen)
 	}
 	// 公共头是大端（与自定义载荷一致）；host 字段在 nlmsghdr 里，不在此处。
 	var h contract.Header
@@ -112,7 +112,7 @@ func decodeHeader(payload []byte) (contract.Header, error) {
 		return contract.Header{}, fmt.Errorf("魔数不匹配：0x%08X", beU32(payload[0:4]))
 	}
 	if int(h.MsgLen) != len(payload) {
-		return contract.Header{}, fmt.Errorf("msg_len=%d 与实际长度 %d 不符", h.MsgLen, len(payload))
+		return contract.Header{}, fmt.Errorf("msg_len=%d does not match actual length %d", h.MsgLen, len(payload))
 	}
 	return h, nil
 }

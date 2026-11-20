@@ -58,7 +58,7 @@ func ListeningPorts(procNetDir string) ([8192]byte, int, error) {
 	}
 
 	if readable == 0 {
-		return [8192]byte{}, 0, fmt.Errorf("netports: %s 下没有任何可读的套接字表", procNetDir)
+		return [8192]byte{}, 0, fmt.Errorf("netports: no readable socket table under %s", procNetDir)
 	}
 
 	count := 0

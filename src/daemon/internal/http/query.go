@@ -147,7 +147,7 @@ func parseLogQuery(r *http.Request) (logQuery, error) {
 	if raw := query.Get("level"); raw != "" {
 		level := strings.ToLower(raw)
 		if !isKnownLogLevel(level) {
-			return q, fmt.Errorf("level=%q 不是 error/warn/info/debug 之一", raw)
+			return q, fmt.Errorf("level=%q is not one of error/warn/info/debug", raw)
 		}
 		q.params.Level = &level
 	}

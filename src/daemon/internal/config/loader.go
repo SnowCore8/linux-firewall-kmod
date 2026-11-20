@@ -107,7 +107,7 @@ func LoadConfigDirectory(dir string, cfg *Config, strict bool) error {
 	})
 
 	if len(files) == 0 {
-		return fmt.Errorf("配置目录中没有 YAML 文件: %s", dir)
+		return fmt.Errorf("no YAML files found in config directory: %s", dir)
 	}
 
 	// 快照：目录加载模式下，任一文件失败则整体回滚。
